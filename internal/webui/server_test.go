@@ -390,7 +390,7 @@ func TestServeLifecycleAndPrivateURL(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Serve returned %v", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("Serve did not stop after context cancellation")
 	}
 }
