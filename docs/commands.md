@@ -43,7 +43,7 @@ wacrawl import --adopt-source
 wacrawl import --restore
 ```
 
-Routine imports merge by stable row identity. Rows absent from the current Desktop snapshot stay in the archive because absence alone is not a deletion signal. This preserves older history after WhatsApp evicts it locally.
+Routine imports merge by stable row identity. When WhatsApp reuses a message row for a reaction or delete-for-everyone event, the original message remains intact and the new event receives its own stable archive identity. Rows absent from the current Desktop snapshot stay in the archive because absence alone is not a deletion signal. This preserves older history after WhatsApp evicts it locally.
 
 The archive binds the canonical Desktop source, a hashed portable CoreData store marker, and a separately hashed account-owned JID from `Axolotl.sqlite`. A nonempty legacy archive without that verified account binding refuses routine merges until an explicit `--adopt-source`. Established account and store fingerprints stay strict across encrypted backup restore. Use a separate `--db` for a different account, or `--restore` when the current snapshot must exactly replace the archive. `--adopt-source` and `--restore` are mutually exclusive.
 

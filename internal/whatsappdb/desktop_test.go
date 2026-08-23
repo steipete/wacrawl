@@ -148,6 +148,78 @@ update ZWAMESSAGE set ZMEDIAITEM=2, ZSTANZAID='reaction-stanza', ZISFROMME=1, ZM
 	}
 }
 
+func TestImportDesktopPreservesReusedRowRevokeAcrossReimport(t *testing.T) {
+	ctx := context.Background()
+	source := t.TempDir()
+	createFixtureDBs(t, source)
+	archive, err := store.Open(ctx, filepath.Join(t.TempDir(), "wacrawl.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = archive.Close() }()
+	if _, err := Import(ctx, archive, source); err != nil {
+		t.Fatal(err)
+	}
+
+	chatDB, err := sql.Open("sqlite", filepath.Join(source, chatDBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, chatDB, `
+update ZWAMEDIAITEM set ZTITLE='group-image', ZMEDIALOCALPATH='', ZMEDIAURL='', ZFILESIZE=0 where Z_PK=1;
+update ZWAMESSAGE set ZSTANZAID='revoke-stanza', ZTEXT='186281455824905@lid', ZMESSAGETYPE=14 where Z_PK=3;`)
+	if err := chatDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var revokePK int64
+	var revokeEventID string
+	for attempt := 1; attempt <= 2; attempt++ {
+		if _, err := Import(ctx, archive, source); err != nil {
+			t.Fatalf("revoke import attempt %d: %v", attempt, err)
+		}
+		messages, err := archive.Messages(ctx, store.MessageFilter{ChatJID: "123@g.us", Limit: 10, Asc: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(messages) != 2 {
+			t.Fatalf("attempt %d group messages = %d, want original and revoke: %+v", attempt, len(messages), messages)
+		}
+		var original, revoke *store.Message
+		for i := range messages {
+			switch messages[i].MessageID {
+			case "group-image":
+				original = &messages[i]
+			case "revoke-stanza":
+				revoke = &messages[i]
+			}
+		}
+		if original == nil || revoke == nil {
+			t.Fatalf("attempt %d missing original or revoke: %+v", attempt, messages)
+		}
+		if original.SourcePK != 3 || original.SourceRowPK != 3 || original.EventID != "wa:3" || original.Text != "launch now" || original.MediaTitle != "launch image" {
+			t.Fatalf("attempt %d original changed: %+v", attempt, *original)
+		}
+		if revoke.SourcePK == 3 || revoke.SourceRowPK != 3 || revoke.EventID == original.EventID || revoke.RawType != 14 || revoke.Text != "186281455824905@lid" || revoke.MediaTitle != original.MessageID || !revoke.Timestamp.Equal(original.Timestamp) || revoke.FromMe != original.FromMe {
+			t.Fatalf("attempt %d revoke fields/provenance = %+v", attempt, *revoke)
+		}
+		if attempt == 1 {
+			revokePK = revoke.SourcePK
+			revokeEventID = revoke.EventID
+		} else if revoke.SourcePK != revokePK || revoke.EventID != revokeEventID {
+			t.Fatalf("revoke identity changed across import: first=(%d,%q) second=(%d,%q)", revokePK, revokeEventID, revoke.SourcePK, revoke.EventID)
+		}
+	}
+
+	status, err := archive.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Messages != 5 || status.MessageRevisions != 0 {
+		t.Fatalf("reused revoke status = %+v", status)
+	}
+}
+
 func TestImportDesktopTurnsNullTextTransitionIntoTombstone(t *testing.T) {
 	ctx := context.Background()
 	source := t.TempDir()

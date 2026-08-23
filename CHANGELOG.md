@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- Preserve the original message and delete-for-everyone event when WhatsApp reuses a message row instead of aborting imports.
+
 ## v0.3.8 - 2026-08-14
 
 ### Fixed

@@ -413,6 +413,122 @@ func TestMergeAllPreservesOriginalAndReusedRowReaction(t *testing.T) {
 	}
 }
 
+func TestMergeAllPreservesOriginalAndReusedRowRevoke(t *testing.T) {
+	tests := []struct {
+		name  string
+		actor string
+	}{
+		{name: "lid actor", actor: "186281455824905@lid"},
+		{name: "phone actor", actor: "186281455824905@s.whatsapp.net"},
+		{name: "trimmed actor", actor: " 186281455824905@lid "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			st, err := Open(ctx, filepath.Join(t.TempDir(), "revoke-reuse.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = st.Close() }()
+
+			now := time.Date(2026, 8, 23, 15, 52, 24, 0, time.UTC)
+			original := Message{
+				SourcePK: 118607, ChatJID: "group@g.us", MessageID: "original-stanza", Timestamp: now,
+				Text: "original body", RawType: 0, MessageType: "text",
+			}
+			stats := ImportStats{SourceIdentity: "fixture-store", AccountIdentity: "fixture-account", FinishedAt: now, Messages: 1}
+			if err := st.MergeAll(ctx, stats, nil, []Chat{{JID: original.ChatJID, Kind: "group"}}, nil, nil, []Message{original}); err != nil {
+				t.Fatal(err)
+			}
+
+			revoke := original
+			revoke.MessageID = "revoke-stanza"
+			revoke.Text = tt.actor
+			revoke.RawType = whatsappReactionRawType
+			revoke.MessageType = "reaction"
+			revoke.MediaTitle = original.MessageID
+			revoke.SourceTextNull = false
+
+			var firstRevokePK int64
+			var firstEventID string
+			for attempt := 1; attempt <= 2; attempt++ {
+				stats.FinishedAt = stats.FinishedAt.Add(time.Minute)
+				if err := st.ValidateImport(ctx, stats, []Message{revoke}, false); err != nil {
+					t.Fatalf("revoke source-row reuse validation attempt %d: %v", attempt, err)
+				}
+				if err := st.MergeAll(ctx, stats, nil, nil, nil, nil, []Message{revoke}); err != nil {
+					t.Fatalf("revoke source-row reuse attempt %d: %v", attempt, err)
+				}
+
+				messages, err := st.Messages(ctx, MessageFilter{Limit: 10, Asc: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(messages) != 2 {
+					t.Fatalf("attempt %d stored %d messages, want original and revoke: %+v", attempt, len(messages), messages)
+				}
+				var storedOriginal, storedRevoke *Message
+				for i := range messages {
+					switch messages[i].MessageID {
+					case original.MessageID:
+						storedOriginal = &messages[i]
+					case revoke.MessageID:
+						storedRevoke = &messages[i]
+					}
+				}
+				if storedOriginal == nil || storedRevoke == nil {
+					t.Fatalf("attempt %d lost an event: %+v", attempt, messages)
+				}
+				if storedOriginal.SourcePK != original.SourcePK || storedOriginal.SourceRowPK != original.SourcePK || storedOriginal.EventID != "wa:118607" || storedOriginal.MessageID != original.MessageID || storedOriginal.Text != original.Text || storedOriginal.RawType != original.RawType {
+					t.Fatalf("attempt %d changed original: %+v", attempt, *storedOriginal)
+				}
+				if storedRevoke.SourcePK < syntheticMessagePKBoundary || storedRevoke.SourcePK >= 2*syntheticMessagePKBoundary || storedRevoke.SourceRowPK != original.SourcePK || storedRevoke.EventID == storedOriginal.EventID || storedRevoke.MessageID != revoke.MessageID || storedRevoke.Text != revoke.Text || storedRevoke.MediaTitle != original.MessageID || !storedRevoke.Timestamp.Equal(original.Timestamp) || storedRevoke.FromMe != original.FromMe {
+					t.Fatalf("attempt %d revoke identity/provenance = %+v", attempt, *storedRevoke)
+				}
+				if attempt == 1 {
+					firstRevokePK = storedRevoke.SourcePK
+					firstEventID = storedRevoke.EventID
+				} else if storedRevoke.SourcePK != firstRevokePK || storedRevoke.EventID != firstEventID {
+					t.Fatalf("re-import changed revoke identity: first=(%d,%q) second=(%d,%q)", firstRevokePK, firstEventID, storedRevoke.SourcePK, storedRevoke.EventID)
+				}
+			}
+
+			var revisions int
+			if err := st.DB().QueryRowContext(ctx, `select count(*) from message_revisions`).Scan(&revisions); err != nil {
+				t.Fatal(err)
+			}
+			if revisions != 0 {
+				t.Fatalf("idempotent revoke re-import created %d revisions", revisions)
+			}
+		})
+	}
+}
+
+func TestReactionReusesSourceRowRejectsNonActorText(t *testing.T) {
+	existing := Message{SourcePK: 118607, ChatJID: "group@g.us", MessageID: "original-stanza"}
+	incoming := Message{
+		SourcePK: existing.SourcePK, ChatJID: existing.ChatJID, MessageID: "revoke-stanza",
+		RawType: whatsappReactionRawType, MediaTitle: existing.MessageID,
+	}
+
+	for _, text := range []string{
+		"",
+		"@lid",
+		"actor@lid",
+		"123actor@lid",
+		"186281455824905@example.com",
+		"186281455824905@lid extra",
+	} {
+		t.Run(text, func(t *testing.T) {
+			incoming.Text = text
+			if reactionReusesSourceRow(existing, incoming) {
+				t.Fatalf("non-actor text %q matched source-row reuse", text)
+			}
+		})
+	}
+}
+
 func TestMergeAllRejectsUnrelatedReactionSourceRowCollision(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "unrelated-reaction.db"))

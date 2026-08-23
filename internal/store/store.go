@@ -856,11 +856,27 @@ func resolveReusedReactionIdentities(ctx context.Context, tx *sql.Tx, restore bo
 
 func reactionReusesSourceRow(existing, incoming Message) bool {
 	return incoming.RawType == whatsappReactionRawType &&
-		incoming.SourceTextNull &&
+		(incoming.SourceTextNull || looksLikeActorJID(strings.TrimSpace(incoming.Text))) &&
 		incoming.MessageID != "" &&
 		incoming.MessageID != existing.MessageID &&
 		incoming.MediaTitle == existing.MessageID &&
 		incoming.ChatJID == existing.ChatJID
+}
+
+func looksLikeActorJID(value string) bool {
+	local, found := strings.CutSuffix(value, "@lid")
+	if !found {
+		local, found = strings.CutSuffix(value, "@s.whatsapp.net")
+	}
+	if !found || local == "" {
+		return false
+	}
+	for i := range len(local) {
+		if local[i] < '0' || local[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func reusedReactionIdentity(message Message) (string, int64) {
