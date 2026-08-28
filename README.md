@@ -22,7 +22,7 @@ brew install openclaw/tap/wacrawl
 
 Upgrade later with `brew upgrade openclaw/tap/wacrawl`.
 
-Or install from source with Go 1.26.6 or newer:
+Or install from source with Go 1.27.0 or newer:
 
 ```bash
 go install github.com/openclaw/wacrawl/cmd/wacrawl@latest
@@ -130,7 +130,7 @@ Run `wacrawl help <command>` or open the [full command reference](docs/commands.
 
 ## Development
 
-Requires Go 1.26.6 or newer.
+Requires Go 1.27.0 or newer.
 
 ```bash
 make build

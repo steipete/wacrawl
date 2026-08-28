@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- Update Go to 1.27.0, modernc SQLite to v1.57.0, cryptography and SQLite runtime dependencies, and CI analysis tools including CodeQL v4.37.9.
+
 ## v0.3.9 - 2026-08-23
 
 ### Fixed

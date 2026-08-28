@@ -734,6 +734,10 @@ func TestBackupCommands(t *testing.T) {
 	if err := exec.Command("git", "init", "--bare", remote).Run(); err != nil { // #nosec G204 -- test creates a temp bare Git remote.
 		t.Fatal(err)
 	}
+	// Detached receive-side maintenance can outlive the push and race TempDir cleanup.
+	if err := exec.Command("git", "-C", remote, "config", "maintenance.auto", "false").Run(); err != nil { // #nosec G204 -- test configures its temp bare Git remote.
+		t.Fatal(err)
+	}
 	config := filepath.Join(t.TempDir(), "backup.json")
 	repo := filepath.Join(t.TempDir(), "backup")
 	identity := filepath.Join(t.TempDir(), "age.key")

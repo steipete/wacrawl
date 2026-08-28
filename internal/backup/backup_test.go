@@ -51,7 +51,7 @@ func TestEncryptedBackupPushPull(t *testing.T) {
 	}
 
 	remote := filepath.Join(t.TempDir(), "remote.git")
-	runGit(t, "", "init", "--bare", remote)
+	initBareRemote(t, remote)
 	repo := filepath.Join(t.TempDir(), "backup")
 	identity := filepath.Join(t.TempDir(), "age.key")
 	configPath := filepath.Join(t.TempDir(), "backup.json")
@@ -358,7 +358,7 @@ func TestHistoricalSnapshotRestore(t *testing.T) {
 
 	repo := filepath.Join(t.TempDir(), "backup")
 	remote := filepath.Join(t.TempDir(), "remote.git")
-	runGit(t, "", "init", "--bare", remote)
+	initBareRemote(t, remote)
 	identity := filepath.Join(t.TempDir(), "age.key")
 	configPath := filepath.Join(t.TempDir(), "backup.json")
 	if _, _, err := Init(ctx, Options{ConfigPath: configPath, Repo: repo, Remote: remote, Identity: identity, Push: false}); err != nil {
@@ -531,7 +531,7 @@ func TestSnapshotHistoryValidation(t *testing.T) {
 
 	repo := filepath.Join(t.TempDir(), "backup")
 	remote := filepath.Join(t.TempDir(), "remote.git")
-	runGit(t, "", "init", "--bare", remote)
+	initBareRemote(t, remote)
 	configPath := filepath.Join(t.TempDir(), "backup.json")
 	if _, _, err := Init(ctx, Options{ConfigPath: configPath, Repo: repo, Remote: remote, Identity: filepath.Join(t.TempDir(), "age.key"), Push: false}); err != nil {
 		t.Fatal(err)
@@ -995,6 +995,13 @@ func openFixtureStore(t *testing.T, name string) *store.Store {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	return st
+}
+
+func initBareRemote(t *testing.T, dir string) {
+	t.Helper()
+	runGit(t, "", "init", "--bare", dir)
+	// Detached receive-side maintenance can outlive the push and race TempDir cleanup.
+	runGit(t, dir, "config", "maintenance.auto", "false")
 }
 
 func runGit(t *testing.T, dir string, args ...string) {
