@@ -139,6 +139,8 @@ For each push, `wacrawl`:
 
 Pull performs the reverse, verifies hashes, localizes portable media paths, validates references, and imports the snapshot transactionally.
 
+The age decoder rejects encrypted headers larger than 2 MiB or containing more than 1024 recipient stanzas. Restores of older backups exceeding either limit fail before importing their contents.
+
 ## Threat model
 
 The backup protects message text, contacts, chat names, participant IDs, media metadata, filenames, archive paths, and copied media from a read-only Git compromise or accidental clone. Each listed recipient can decrypt every shard. Age detects encrypted-file corruption, and `wacrawl` also verifies manifest hashes after decryption.
