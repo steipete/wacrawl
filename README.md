@@ -132,6 +132,8 @@ Run `wacrawl help <command>` or open the [full command reference](docs/commands.
 
 Requires Go 1.27.0 or newer.
 
+The preferred build toolchain is Go 1.27.1, selected automatically by `go.mod` and CI. The source minimum remains Go 1.27.0.
+
 ```bash
 make build
 make test
