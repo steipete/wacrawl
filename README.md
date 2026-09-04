@@ -28,6 +28,8 @@ Or install from source with Go 1.27.0 or newer:
 go install github.com/openclaw/wacrawl/cmd/wacrawl@latest
 ```
 
+On macOS, source builds with Go 1.27 require macOS 13 or newer. The published v0.3.9 binaries retain macOS 12 support.
+
 Direct source discovery requires macOS and the desktop WhatsApp app. Release builds for macOS, Linux, and Windows can work with an existing archive or encrypted backup.
 
 ## Quick start
@@ -131,6 +133,8 @@ Run `wacrawl help <command>` or open the [full command reference](docs/commands.
 ## Development
 
 Requires Go 1.27.0 or newer.
+
+The preferred build toolchain is Go 1.27.1, selected automatically by `go.mod` and CI. The source minimum remains Go 1.27.0.
 
 ```bash
 make build

@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Prefer Go 1.27.1 for builds while retaining Go 1.27.0 source compatibility; update modernc SQLite to v1.58.0, cryptography dependencies, and the test-only pprof dependency.
 - Update age to v1.3.2 and CrawlKit to v0.14.8 for encrypted-backup fixes and input hardening, including limits on encrypted header size and recipient stanza count.
 - Update Go to 1.27.0, modernc SQLite to v1.57.0, cryptography and SQLite runtime dependencies, and CI analysis tools including CodeQL v4.37.9.
 
