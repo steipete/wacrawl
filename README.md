@@ -14,6 +14,8 @@
 
 ## Install
 
+On macOS, v0.3.10 and newer require macOS 13 or newer. v0.3.9 remains the last release supporting macOS 12.
+
 Homebrew is the smallest path:
 
 ```bash
@@ -28,7 +30,7 @@ Or install from source with Go 1.27.0 or newer:
 go install github.com/openclaw/wacrawl/cmd/wacrawl@latest
 ```
 
-On macOS, source builds with Go 1.27 require macOS 13 or newer. The published v0.3.9 binaries retain macOS 12 support.
+Source builds with Go 1.27 also require macOS 13 or newer.
 
 Direct source discovery requires macOS and the desktop WhatsApp app. Release builds for macOS, Linux, and Windows can work with an existing archive or encrypted backup.
 

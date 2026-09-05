@@ -1,12 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.3.10 - 2026-09-05
+
+**Highlights:** New binaries require macOS 13 or newer; v0.3.9 remains the last release supporting macOS 12.
 
 ### Changed
 
+- Require Go 1.27.0 or newer and prefer Go 1.27.1 for builds; Go 1.27 builds require macOS 13 or newer, while the published v0.3.9 binaries retain macOS 12 support.
 - Update age to v1.3.2, CrawlKit to v0.14.8, and cryptography dependencies for encrypted-backup fixes and input hardening; encrypted headers are limited to 2 MiB and 1024 recipient stanzas.
 - Refresh modernc SQLite to v1.58.0 and its libc runtime to v1.75.7.
-- Require Go 1.27.0 or newer and prefer Go 1.27.1 for builds; Go 1.27 builds require macOS 13 or newer, while the published v0.3.9 binaries retain macOS 12 support.
 - Refresh test-only compiler and pprof dependencies and CI analysis tools, including CodeQL v4.37.9.
 
 ## v0.3.9 - 2026-08-23

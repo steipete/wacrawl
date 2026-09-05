@@ -38,4 +38,6 @@ windows/amd64
 windows/arm64
 ```
 
+Starting with v0.3.10, macOS binaries require macOS 13 or newer. v0.3.9 is the last release supporting macOS 12.
+
 The Homebrew formula lives in the [`openclaw/homebrew-tap`](https://github.com/openclaw/homebrew-tap/blob/main/Formula/wacrawl.rb) repository.
