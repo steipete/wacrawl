@@ -4,9 +4,10 @@
 
 ### Changed
 
-- Prefer Go 1.27.1 for builds while retaining Go 1.27.0 source compatibility; update modernc SQLite to v1.58.0, cryptography dependencies, and the test-only pprof dependency.
-- Update age to v1.3.2 and CrawlKit to v0.14.8 for encrypted-backup fixes and input hardening, including limits on encrypted header size and recipient stanza count.
-- Update Go to 1.27.0, modernc SQLite to v1.57.0, cryptography and SQLite runtime dependencies, and CI analysis tools including CodeQL v4.37.9.
+- Update age to v1.3.2, CrawlKit to v0.14.8, and cryptography dependencies for encrypted-backup fixes and input hardening; encrypted headers are limited to 2 MiB and 1024 recipient stanzas.
+- Refresh modernc SQLite to v1.58.0 and its libc runtime to v1.75.7.
+- Require Go 1.27.0 or newer and prefer Go 1.27.1 for builds; Go 1.27 builds require macOS 13 or newer, while the published v0.3.9 binaries retain macOS 12 support.
+- Refresh test-only compiler and pprof dependencies and CI analysis tools, including CodeQL v4.37.9.
 
 ## v0.3.9 - 2026-08-23
 
