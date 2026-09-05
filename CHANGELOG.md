@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.3.10 - 2026-09-05
 
 **Highlights:** New binaries require macOS 13 or newer; v0.3.9 remains the last release supporting macOS 12.
