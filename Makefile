@@ -56,6 +56,7 @@ coverage:
 
 deps:
 	GOWORK=off go mod verify
+	bash scripts/check-sqlite-runtime.sh
 	GOWORK=off go mod tidy
 	git diff --exit-code -- go.mod go.sum
 	GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...

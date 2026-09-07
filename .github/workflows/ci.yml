@@ -107,6 +107,9 @@ jobs:
       - name: Verify module cache
         run: go mod verify
 
+      - name: Check SQLite runtime compatibility
+        run: bash scripts/check-sqlite-runtime.sh
+
       - name: Check go.mod tidy
         run: |
           go mod tidy
