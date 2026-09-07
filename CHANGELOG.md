@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.11 - 2026-09-07
 
 **Highlights:** Keep SQLite paired with its supported runtime and catch incompatible dependency updates before release.
 
