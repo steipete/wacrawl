@@ -138,6 +138,8 @@ Requires Go 1.27.0 or newer.
 
 The preferred build toolchain is Go 1.27.1, selected automatically by `go.mod` and CI. The source minimum remains Go 1.27.0.
 
+Keep `modernc.org/libc` at the exact version required by `modernc.org/sqlite`; SQLite's generated code depends on that runtime pairing. Update them together, and check test-only compiler updates for indirect libc upgrades. `make deps` and CI verify the resolved versions.
+
 ```bash
 make build
 make test

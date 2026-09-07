@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+**Highlights:** Keep SQLite paired with its supported runtime and catch incompatible dependency updates before release.
+
+### Fixed
+
+- Align SQLite v1.58.0 with its required libc v1.75.6 runtime and compatible test-only ccgo v4.35.0; check this pairing in local dependency checks and CI.
+
+### Changed
+
+- Refresh CrawlKit to v0.14.9 and the test-only pprof dependency.
+
 ## 0.3.10 - 2026-09-05
 
 **Highlights:** New binaries require macOS 13 or newer; v0.3.9 remains the last release supporting macOS 12.
