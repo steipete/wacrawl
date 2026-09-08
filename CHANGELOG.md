@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Keep machine-advertised search and SQL commands from automatically syncing the archive, and advertise the actual JSON backup configuration path.
+
 ## 0.3.11 - 2026-09-07
 
 **Highlights:** Keep SQLite paired with its supported runtime and catch incompatible dependency updates before release.
