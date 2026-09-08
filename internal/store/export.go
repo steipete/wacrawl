@@ -49,35 +49,53 @@ func (d SnapshotData) ImportStats(sourcePath, dbPath string, finishedAt time.Tim
 }
 
 func (s *Store) ExportAll(ctx context.Context) (SnapshotData, error) {
-	contacts, err := s.exportContacts(ctx)
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return SnapshotData{}, err
 	}
-	chats, err := s.exportChats(ctx)
+	defer func() { _ = tx.Rollback() }()
+	data, err := exportSnapshot(ctx, tx)
 	if err != nil {
 		return SnapshotData{}, err
 	}
-	groups, err := s.exportGroups(ctx)
+	if err := tx.Commit(); err != nil {
+		return SnapshotData{}, err
+	}
+	return data, nil
+}
+
+func exportSnapshot(ctx context.Context, db storedb.DBTX) (SnapshotData, error) {
+	q := storedb.New(db)
+	contacts, err := exportContacts(ctx, q)
 	if err != nil {
 		return SnapshotData{}, err
 	}
-	participants, err := s.exportParticipants(ctx)
+	chats, err := exportChats(ctx, q)
 	if err != nil {
 		return SnapshotData{}, err
 	}
-	messages, err := s.Messages(ctx, MessageFilter{Limit: int(^uint(0) >> 1), Asc: true, IncludeDeleted: true})
+	groups, err := exportGroups(ctx, q)
 	if err != nil {
 		return SnapshotData{}, err
 	}
-	revisions, err := s.exportMessageRevisions(ctx)
+	participants, err := exportParticipants(ctx, q)
 	if err != nil {
 		return SnapshotData{}, err
 	}
-	sourceStoreIdentity, err := s.syncStateValue(ctx, "merge_source_store_identity")
+	query, args := messageListQuery(MessageFilter{Limit: int(^uint(0) >> 1), Asc: true, IncludeDeleted: true})
+	messages, err := scanMessages(ctx, db, query, args...)
 	if err != nil {
 		return SnapshotData{}, err
 	}
-	accountIdentity, err := s.syncStateValue(ctx, "merge_account_identity")
+	revisions, err := exportMessageRevisions(ctx, db)
+	if err != nil {
+		return SnapshotData{}, err
+	}
+	sourceStoreIdentity, err := syncStateValue(ctx, db, "merge_source_store_identity")
+	if err != nil {
+		return SnapshotData{}, err
+	}
+	accountIdentity, err := syncStateValue(ctx, db, "merge_account_identity")
 	if err != nil {
 		return SnapshotData{}, err
 	}
@@ -90,9 +108,9 @@ func (s *Store) ExportAll(ctx context.Context) (SnapshotData, error) {
 	return SnapshotData{Contacts: contacts, Chats: chats, Groups: groups, Participants: participants, Messages: messages, Revisions: revisions, SourceStoreIdentity: sourceStoreIdentity, AccountIdentity: accountIdentity}, nil
 }
 
-func (s *Store) syncStateValue(ctx context.Context, key string) (string, error) {
+func syncStateValue(ctx context.Context, db storedb.DBTX, key string) (string, error) {
 	var value string
-	err := s.db.QueryRowContext(ctx, `select value from sync_state where key=?`, key).Scan(&value)
+	err := db.QueryRowContext(ctx, `select value from sync_state where key=?`, key).Scan(&value)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
@@ -100,7 +118,7 @@ func (s *Store) syncStateValue(ctx context.Context, key string) (string, error) 
 }
 
 func (s *Store) Contacts(ctx context.Context) ([]Contact, error) {
-	contacts, err := s.exportContacts(ctx)
+	contacts, err := exportContacts(ctx, s.q)
 	if err != nil {
 		return nil, err
 	}
@@ -119,8 +137,8 @@ func (s *Store) ImportSnapshot(ctx context.Context, data SnapshotData, sourcePat
 	return s.importAll(ctx, true, stats, data.Contacts, data.Chats, data.Groups, data.Participants, data.Messages, data.Revisions)
 }
 
-func (s *Store) exportMessageRevisions(ctx context.Context) ([]MessageRevision, error) {
-	rows, err := s.db.QueryContext(ctx, `select event_id,payload_json,recorded_at,event_source,reason from message_revisions order by id`)
+func exportMessageRevisions(ctx context.Context, db storedb.DBTX) ([]MessageRevision, error) {
+	rows, err := db.QueryContext(ctx, `select event_id,payload_json,recorded_at,event_source,reason from message_revisions order by id`)
 	if err != nil {
 		return nil, err
 	}
@@ -138,8 +156,8 @@ func (s *Store) exportMessageRevisions(ctx context.Context) ([]MessageRevision, 
 	return out, rows.Err()
 }
 
-func (s *Store) exportContacts(ctx context.Context) ([]Contact, error) {
-	rows, err := s.q.ExportContacts(ctx)
+func exportContacts(ctx context.Context, q *storedb.Queries) ([]Contact, error) {
+	rows, err := q.ExportContacts(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -150,8 +168,8 @@ func (s *Store) exportContacts(ctx context.Context) ([]Contact, error) {
 	return out, nil
 }
 
-func (s *Store) exportChats(ctx context.Context) ([]Chat, error) {
-	rows, err := s.q.ExportChats(ctx)
+func exportChats(ctx context.Context, q *storedb.Queries) ([]Chat, error) {
+	rows, err := q.ExportChats(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -162,8 +180,8 @@ func (s *Store) exportChats(ctx context.Context) ([]Chat, error) {
 	return out, nil
 }
 
-func (s *Store) exportGroups(ctx context.Context) ([]Group, error) {
-	rows, err := s.q.ExportGroups(ctx)
+func exportGroups(ctx context.Context, q *storedb.Queries) ([]Group, error) {
+	rows, err := q.ExportGroups(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -174,8 +192,8 @@ func (s *Store) exportGroups(ctx context.Context) ([]Group, error) {
 	return out, nil
 }
 
-func (s *Store) exportParticipants(ctx context.Context) ([]GroupParticipant, error) {
-	rows, err := s.q.ExportParticipants(ctx)
+func exportParticipants(ctx context.Context, q *storedb.Queries) ([]GroupParticipant, error) {
+	rows, err := q.ExportParticipants(ctx)
 	if err != nil {
 		return nil, err
 	}

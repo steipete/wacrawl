@@ -284,7 +284,7 @@ func TestImportDesktopRejectsAccountSwitchAtSameStore(t *testing.T) {
 	}
 	mustExec(t, chatDB, `
 delete from ZWAMESSAGE;
-insert into ZWAMEDIAITEM values (2, 10, 'foreign.bin', '', 'foreign', '', 7);
+insert into ZWAMEDIAITEM values (2, 10, 'Media/foreign.bin', '', 'foreign', '', 7);
 insert into ZWAMESSAGE values (10, 1, null, 2, 'account-b', 0, 700000010, 'other account', 1, 0, '111@s.whatsapp.net', '', 'Other');`)
 	if err := chatDB.Close(); err != nil {
 		t.Fatal(err)
@@ -297,7 +297,10 @@ insert into ZWAMESSAGE values (10, 1, null, 2, 'account-b', 0, 700000010, 'other
 	if err := axolotlDB.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(source, "foreign.bin"), []byte("foreign"), 0o600); err != nil {
+	if err := os.MkdirAll(filepath.Join(source, "Media"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "Media", "foreign.bin"), []byte("foreign"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Import(ctx, archive, source); err == nil || !strings.Contains(err.Error(), "different WhatsApp account") {
@@ -307,7 +310,7 @@ insert into ZWAMESSAGE values (10, 1, null, 2, 'account-b', 0, 700000010, 'other
 	if _, err := ImportWithOptions(ctx, archive, ImportOptions{SourcePath: source, CopyMedia: true, MediaRoot: mediaRoot}); err == nil || !strings.Contains(err.Error(), "different WhatsApp account") {
 		t.Fatalf("copy-media account switch error = %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(mediaRoot, "foreign.bin")); !os.IsNotExist(err) {
+	if _, err := os.Stat(mediaRoot); !os.IsNotExist(err) {
 		t.Fatalf("rejected import wrote foreign media: %v", err)
 	}
 	if _, err := ImportWithOptions(ctx, archive, ImportOptions{SourcePath: source, Restore: true}); err != nil {
@@ -881,8 +884,9 @@ func TestCleanDesktopMediaRel(t *testing.T) {
 		{"blank", "", ""},
 		{"current", ".", ""},
 		{"parent", "..", ""},
-		{"parent prefix", filepath.Join("..", "..", "Media", "photo.jpg"), "photo.jpg"},
-		{"absolute", filepath.Join(string(os.PathSeparator), "Media", "photo.jpg"), filepath.Join("Media", "photo.jpg")},
+		{"parent prefix", filepath.Join("..", "..", "Media", "photo.jpg"), ""},
+		{"absolute", filepath.Join(string(os.PathSeparator), "Media", "photo.jpg"), ""},
+		{"nonmedia", "Axolotl.sqlite", ""},
 		{"normal", filepath.Join("Media", "chat", "photo.jpg"), filepath.Join("Media", "chat", "photo.jpg")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -945,7 +949,7 @@ insert into ZWAMESSAGE values (5, 2, 1, 2, 'missing-media', 0, 700000004, 'missi
 			missingPath = msg.MediaPath
 		}
 	}
-	wantCopied := filepath.Join(filepath.Dir(archivePath), "media", "Message", "Media", "123@g.us", "a", "test.jpg")
+	wantCopied := auditMediaObjectPath(filepath.Join(filepath.Dir(archivePath), "media"), []byte("image"))
 	if copiedPath != wantCopied {
 		t.Fatalf("copied media path = %q, want %q", copiedPath, wantCopied)
 	}
@@ -988,12 +992,12 @@ func TestResolveDesktopMediaPathPrefersMessageMedia(t *testing.T) {
 	}
 
 	absolute := filepath.Join(string(os.PathSeparator), "tmp", "outside.jpg")
-	confined := filepath.Join(source, "tmp", "outside.jpg")
+	confined := ""
 	if got := resolveDesktopMediaPath(source, absolute); got != confined {
 		t.Fatalf("absolute media path = %q, want confined %q", got, confined)
 	}
 
-	traversal := filepath.Join(source, "outside.jpg")
+	traversal := ""
 	if got := resolveDesktopMediaPath(source, "../outside.jpg"); got != traversal {
 		t.Fatalf("traversal media path = %q, want confined %q", got, traversal)
 	}
@@ -1024,7 +1028,7 @@ func TestCopyArchiveMediaDeduplicatesAndConfinesPaths(t *testing.T) {
 	if copied != 1 || missing != 1 {
 		t.Fatalf("copy stats = %d/%d, want 1/1", copied, missing)
 	}
-	wantCopied := filepath.Join(mediaRoot, "Message", "Media", "chat", "photo.jpg")
+	wantCopied := auditMediaObjectPath(mediaRoot, []byte("image"))
 	if messages[0].MediaPath != wantCopied || messages[1].MediaPath != wantCopied {
 		t.Fatalf("duplicate copied media paths not rewritten: %+v", messages[:2])
 	}
@@ -1033,14 +1037,10 @@ func TestCopyArchiveMediaDeduplicatesAndConfinesPaths(t *testing.T) {
 	}
 
 	outsidePath := filepath.Join(t.TempDir(), "outside.jpg")
-	dest, err := archiveMediaPath(source, mediaRoot, outsidePath)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := sourceMediaRoot(source, outsidePath); err == nil {
+		t.Fatal("expected outside source rejection")
 	}
-	if dest != filepath.Join(mediaRoot, "outside.jpg") {
-		t.Fatalf("outside path fallback = %q", dest)
-	}
-	if _, err := archiveMediaPath(source, mediaRoot, source); err == nil {
+	if _, err := sourceMediaRoot(source, source); err == nil {
 		t.Fatal("expected source root path to be rejected")
 	}
 }
@@ -1066,11 +1066,12 @@ func TestCopyMediaFileRejectsUnmaterialized(t *testing.T) {
 
 	dir := t.TempDir()
 	src := filepath.Join(dir, "photo.jpg")
-	dest := filepath.Join(dir, "out", "photo.jpg")
+	root := filepath.Join(dir, "out")
+	dest := auditMediaObjectPath(root, []byte("image"))
 	if err := os.WriteFile(src, []byte("image"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err := copyMediaFile(src, dest)
+	_, err := copyMediaFile(dir, src, root)
 	if !errors.Is(err, errMediaNotDownloaded) {
 		t.Fatalf("unmaterialized copyMediaFile error = %v", err)
 	}
@@ -1082,11 +1083,12 @@ func TestCopyMediaFileRejectsUnmaterialized(t *testing.T) {
 func TestCopyMediaFileCopiesWhenMaterialized(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "photo.jpg")
-	dest := filepath.Join(dir, "out", "photo.jpg")
+	root := filepath.Join(dir, "out")
+	dest := auditMediaObjectPath(root, []byte("image"))
 	if err := os.WriteFile(src, []byte("image"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := copyMediaFile(src, dest); err != nil {
+	if _, err := copyMediaFile(dir, src, root); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(dest) // #nosec G304 -- dest is a path we just created under t.TempDir.
@@ -1099,15 +1101,16 @@ func TestCopyMediaFileOpenErrorDoesNotCreateDestination(t *testing.T) {
 	old := openMediaFileForCopy
 	t.Cleanup(func() { openMediaFileForCopy = old })
 	wantErr := errors.New("open failed")
-	openMediaFileForCopy = func(string) (*os.File, error) { return nil, wantErr }
+	openMediaFileForCopy = func(string, string) (*os.File, error) { return nil, wantErr }
 
 	dir := t.TempDir()
 	src := filepath.Join(dir, "photo.jpg")
-	dest := filepath.Join(dir, "out", "photo.jpg")
+	root := filepath.Join(dir, "out")
+	dest := auditMediaObjectPath(root, []byte("image"))
 	if err := os.WriteFile(src, []byte("image"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := copyMediaFile(src, dest); !errors.Is(err, wantErr) {
+	if _, err := copyMediaFile(dir, src, root); !errors.Is(err, wantErr) {
 		t.Fatalf("copyMediaFile error = %v, want %v", err, wantErr)
 	}
 	if _, err := os.Stat(dest); !os.IsNotExist(err) {
@@ -1121,7 +1124,8 @@ func TestCopyMediaFileReadErrorRemovesDestination(t *testing.T) {
 
 	dir := t.TempDir()
 	src := filepath.Join(dir, "photo.jpg")
-	dest := filepath.Join(dir, "out", "photo.jpg")
+	root := filepath.Join(dir, "out")
+	dest := auditMediaObjectPath(root, []byte("image"))
 	if err := os.WriteFile(src, []byte("image"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1129,9 +1133,9 @@ func TestCopyMediaFileReadErrorRemovesDestination(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	openMediaFileForCopy = func(string) (*os.File, error) { return writeOnly, nil }
+	openMediaFileForCopy = func(string, string) (*os.File, error) { return writeOnly, nil }
 
-	if err := copyMediaFile(src, dest); err == nil {
+	if _, err := copyMediaFile(dir, src, root); err == nil {
 		t.Fatal("copyMediaFile should fail when the source cannot be read")
 	}
 	if _, err := os.Stat(dest); !os.IsNotExist(err) {

@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- Preserve source and previously archived media with confined reads, sibling staging, immutable verified content-addressed copies, and attachment-aware reference retention on normal refresh.
+- Scope encrypted-backup Git commits to literal current and previous manifest artifacts, preserve unrelated staging, and reject backup/source/identity overlaps before writes.
+- Retry explicitly requested backup pushes even when unchanged, checking unpublished history first and refusing unverified paths without rewriting commits.
+- Read all backup rows and archive bindings from one SQLite snapshot.
 - Keep machine-advertised search and SQL commands from automatically syncing the archive, and advertise the actual JSON backup configuration path.
 
 ## 0.3.11 - 2026-09-07

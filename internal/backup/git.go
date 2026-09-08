@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	ckbackup "github.com/openclaw/crawlkit/backup"
 	"github.com/openclaw/crawlkit/mirror"
 )
 
@@ -45,6 +46,13 @@ func ensureRepo(ctx context.Context, cfg Config) error {
 	return nil
 }
 
+func ensureRepoForWrite(ctx context.Context, cfg Config) error {
+	if _, err := os.Stat(filepath.Join(cfg.Repo, ".git")); err == nil {
+		return mirror.EnsureRepo(ctx, mirrorOptions(cfg))
+	}
+	return ensureRepo(ctx, cfg)
+}
+
 func ensureRepoForRead(ctx context.Context, cfg Config) error {
 	if strings.TrimSpace(cfg.Repo) == "" {
 		return fmt.Errorf("backup repo path is required")
@@ -52,10 +60,45 @@ func ensureRepoForRead(ctx context.Context, cfg Config) error {
 	return mirror.Fetch(ctx, syncOptions(cfg))
 }
 
-func commitAndPush(ctx context.Context, cfg Config, message string, push bool) (bool, error) {
-	changed, err := mirror.Commit(ctx, mirrorOptions(cfg), message)
-	if err != nil || !push || !changed {
+func commitAndPush(ctx context.Context, cfg Config, message string, push bool, manifests ...ckbackup.Manifest) (bool, error) {
+	paths, err := ownedPathspecs(ctx, cfg, manifests...)
+	if err != nil {
+		return false, err
+	}
+	if err := prepareOwnedDeletions(ctx, cfg.Repo, paths); err != nil {
+		return false, err
+	}
+	changed, err := mirror.CommitPaths(ctx, mirrorOptions(cfg), message, paths)
+	if err != nil || !push {
 		return changed, err
 	}
-	return true, mirror.PushAtomic(ctx, mirrorOptions(cfg), "HEAD")
+	if err := verifyPendingHistory(ctx, cfg); err != nil {
+		return changed, err
+	}
+	return changed, mirror.PushAtomic(ctx, mirrorOptions(cfg), "HEAD")
+}
+
+func prepareOwnedDeletions(ctx context.Context, repo string, paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	args := append([]string{"diff", "--cached", "--name-only", "--diff-filter=D", "-z", "--"}, paths...)
+	deleted, err := scopeGit(ctx, repo, args...)
+	if err != nil {
+		return err
+	}
+	var specs []string
+	for _, name := range strings.Split(string(deleted), "\x00") {
+		if name != "" {
+			specs = append(specs, ":(literal)"+name)
+		}
+	}
+	if len(specs) == 0 {
+		return nil
+	}
+	// The pinned CommitPaths stages by pathname, which requires deleted paths
+	// to remain in the index. Only restore owned index entries, not file bytes.
+	args = append([]string{"restore", "--source=HEAD", "--staged", "--"}, specs...)
+	_, err = scopeGit(ctx, repo, args...)
+	return err
 }
