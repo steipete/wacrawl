@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Publish explicit zero-message backup shards with the final counts so repeated empty backups remain unchanged, including with generation-based CrawlKit writers.
 - Preserve source and previously archived media with confined reads, sibling staging, immutable verified content-addressed copies, and attachment-aware reference retention on normal refresh.
 - Scope encrypted-backup Git commits to literal current and previous manifest artifacts, preserve unrelated staging, and reject backup/source/identity overlaps before writes.
 - Retry explicitly requested backup pushes even when unchanged, checking unpublished history first and refusing unverified paths without rewriting commits.

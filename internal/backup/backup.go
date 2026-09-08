@@ -274,28 +274,14 @@ func writeSnapshot(ctx context.Context, cfg Config, data store.SnapshotData, fil
 		{Table: "message_revisions", CountKey: "message_revisions", Path: "data/message_revisions.jsonl.gz.age", Rows: data.Revisions},
 		{Table: "archive_identity", CountKey: "archive_identity", Path: "data/archive_identity.jsonl.gz.age", Rows: identities},
 	}
+	if len(data.Messages) == 0 {
+		shards = append(shards, ckbackup.Shard{Table: "messages", Path: "data/messages/unknown/00.jsonl.gz.age", Rows: data.Messages})
+	}
 	for _, shard := range messageShards(data.Messages) {
 		shards = append(shards, ckbackup.Shard{Table: "messages", Path: shard.path, Rows: shard.messages})
 	}
-	sharedOld := toCrawlkitManifest(old)
-	if len(data.Messages) == 0 {
-		delete(sharedOld.Counts, "messages")
-	}
-	manifest, err := ckbackup.WriteSnapshotWithFiles(ctx, crawlkitConfig(cfg), shards, files, sharedOld)
+	manifest, err := ckbackup.WriteSnapshotWithFiles(ctx, crawlkitConfig(cfg), shards, files, toCrawlkitManifest(old))
 	if err != nil {
-		return Manifest{}, err
-	}
-	manifest.Counts["contacts"] = len(data.Contacts)
-	manifest.Counts["chats"] = len(data.Chats)
-	manifest.Counts["groups"] = len(data.Groups)
-	manifest.Counts["participants"] = len(data.Participants)
-	manifest.Counts["messages"] = len(data.Messages)
-	manifest.Counts["message_revisions"] = len(data.Revisions)
-	manifest.Counts["archive_identity"] = len(identities)
-	if ckbackup.EquivalentManifest(toCrawlkitManifest(old), manifest) {
-		return old, nil
-	}
-	if err := ckbackup.WriteManifest(cfg.Repo, manifest); err != nil {
 		return Manifest{}, err
 	}
 	return fromCrawlkitManifest(manifest), nil
