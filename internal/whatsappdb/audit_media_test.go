@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,12 +13,178 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	ckbackup "github.com/openclaw/crawlkit/backup"
 	"github.com/openclaw/wacrawl/internal/backup"
 	"github.com/openclaw/wacrawl/internal/store"
 )
+
+func TestAuditInvalidMediaPreservesMetadata(t *testing.T) {
+	for _, kind := range []string{"absolute", "traversal", "message-symlink", "root-symlink", "parent-symlink", "leaf-symlink", "directory", "null-text"} {
+		t.Run(kind, func(t *testing.T) {
+			ctx := context.Background()
+			st, source, cache := auditMediaFixture(t)
+			db, err := sql.Open("sqlite", filepath.Join(source, chatDBName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = db.Close() }()
+			if kind == "null-text" {
+				mustExec(t, db, `update ZWAMESSAGE set ZTEXT=null,ZMESSAGETYPE=0 where Z_PK=3;
+update ZWAMEDIAITEM set ZTITLE='',ZMEDIAURL='',ZFILESIZE=0 where Z_PK=1;`)
+			}
+			if _, err := Import(ctx, st, source); err != nil {
+				t.Fatal(err)
+			}
+			before, err := st.ExportAll(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			outside := filepath.Join(t.TempDir(), "sentinel")
+			if err := os.WriteFile(outside, []byte("preserved outside bytes"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			path := "Media/123@g.us/a/test.jpg"
+			switch kind {
+			case "absolute", "null-text":
+				path = outside
+			case "traversal":
+				path = "Media/../../sentinel"
+			case "message-symlink", "root-symlink", "parent-symlink":
+				target := filepath.Join(source, "Message")
+				switch kind {
+				case "root-symlink":
+					target = filepath.Join(target, "Media")
+				case "parent-symlink":
+					target = filepath.Dir(cache)
+				}
+				moved := filepath.Join(t.TempDir(), "moved")
+				if err := os.Rename(target, moved); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(moved, target); err != nil {
+					t.Fatal(err)
+				}
+			case "leaf-symlink", "directory":
+				if err := os.Remove(cache); err != nil {
+					t.Fatal(err)
+				}
+				if kind == "directory" {
+					err = os.Mkdir(cache, 0o700)
+				} else {
+					err = os.Symlink(outside, cache)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := db.Exec(`update ZWAMEDIAITEM set ZMEDIALOCALPATH=? where Z_PK=1`, path); err != nil {
+				t.Fatal(err)
+			}
+			snap, err := SnapshotPath(source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = os.RemoveAll(snap.Root) }()
+			extracted, err := Extract(ctx, snap)
+			if err != nil || len(extracted.Messages) != len(before.Messages) {
+				t.Fatalf("metadata extraction dropped rows: %+v, %v", extracted, err)
+			}
+			for _, message := range extracted.Messages {
+				if message.MessageID == "group-image" && (message.MediaPath != "" || message.SourceTextNull != (kind == "null-text")) {
+					t.Fatalf("unsafe path or altered source null state: %+v", message)
+				}
+			}
+			if _, err := Import(ctx, st, source); err != nil {
+				t.Fatalf("optional attachment aborted metadata import: %v", err)
+			}
+			after, err := st.ExportAll(ctx)
+			if err != nil || len(after.Messages) != len(before.Messages) || after.AccountIdentity != before.AccountIdentity || after.SourceStoreIdentity != before.SourceStoreIdentity {
+				t.Fatalf("metadata or binding changed: %+v, %v", after, err)
+			}
+			for i, old := range before.Messages {
+				got := after.Messages[i]
+				old.LastSeenAt = got.LastSeenAt
+				if old.MessageID == "group-image" {
+					old.MediaPath = ""
+				}
+				if !reflect.DeepEqual(got, old) {
+					t.Fatalf("message %d changed beyond rejected path/observation time:\n%+v\n%+v", i, old, got)
+				}
+			}
+			if len(after.Revisions) != len(before.Revisions)+1 {
+				t.Fatalf("revision count: %+v", after.Revisions)
+			}
+			revision := after.Revisions[len(after.Revisions)-1]
+			if revision.Reason != "whatsapp_edit" || revision.EventSource != "whatsapp-desktop" {
+				t.Fatalf("fabricated deletion: %+v", revision)
+			}
+			encoded, err := json.Marshal(after)
+			if err != nil || bytes.Contains(encoded, []byte(outside)) || bytes.Contains(encoded, []byte("SourceMediaPathRejected")) {
+				t.Fatalf("unsafe path or transient evidence persisted: %s, %v", encoded, err)
+			}
+			data, err := os.ReadFile(outside) // #nosec G304 -- unchanged bytes of the sentinel this test created in a separate temp directory.
+			if err != nil || string(data) != "preserved outside bytes" {
+				t.Fatal("outside sentinel changed")
+			}
+		})
+	}
+}
+
+func TestAuditInvalidMediaCopyPreflightsWholeBatch(t *testing.T) {
+	ctx := context.Background()
+	st, source, _ := auditMediaFixture(t)
+	if _, err := Import(ctx, st, source); err != nil {
+		t.Fatal(err)
+	}
+	before, err := st.ExportAll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(source, chatDBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	mustExec(t, db, `insert into ZWAMESSAGE values (5,1,null,2,'invalid-last',0,700000004,'keep metadata',1,0,'111@s.whatsapp.net','','');
+insert into ZWAMEDIAITEM values (2,5,'Media/../../outside','','', '',0);`)
+	root := filepath.Join(filepath.Dir(st.Path()), "media")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "sentinel"), []byte("prior media"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	originalOpen := openMediaFileForCopy
+	t.Cleanup(func() { openMediaFileForCopy = originalOpen })
+	opened := 0
+	openMediaFileForCopy = func(root, name string) (*os.File, error) {
+		opened++
+		return originalOpen(root, name)
+	}
+	stats, err := ImportWithOptions(ctx, st, ImportOptions{SourcePath: source, CopyMedia: true})
+	if err == nil || !strings.Contains(err.Error(), "media") || stats.MediaCopied != 0 || opened != 0 {
+		t.Fatalf("batch preflight: copied=%d opened=%d error=%v", stats.MediaCopied, opened, err)
+	}
+	after, err := st.ExportAll(ctx)
+	if err != nil || !reflect.DeepEqual(before, after) {
+		t.Fatalf("archive/revisions/bindings changed on rejected batch: %v", err)
+	}
+	files, err := os.ReadDir(root)
+	if err != nil || len(files) != 1 || files[0].Name() != "sentinel" {
+		t.Fatalf("media changed: %v, %v", files, err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "sentinel")) // #nosec G304 -- fixed sentinel under this test's own archive media root.
+	if err != nil || string(data) != "prior media" {
+		t.Fatal("prior media bytes changed")
+	}
+	stages, err := filepath.Glob(filepath.Join(filepath.Dir(root), ".wacrawl-media-*"))
+	if err != nil || len(stages) != 0 {
+		t.Fatalf("batch created stages: %v, %v", stages, err)
+	}
+}
 
 func auditMediaObjectPath(root string, content []byte) string {
 	digest := fmt.Sprintf("%x", sha256.Sum256(content))

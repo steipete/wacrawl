@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- Preserve an existing backup checkout's origin when configuration names a different remote, including unchanged push retries.
+- Retain message metadata when an optional local attachment path is invalid, without fabricating a deletion; reject the entire media-copy batch before copying any object.
+
 - Publish explicit zero-message backup shards with the final counts so repeated empty backups remain unchanged, including with generation-based CrawlKit writers.
 - Preserve source and previously archived media with confined reads, sibling staging, immutable verified content-addressed copies, and attachment-aware reference retention on normal refresh.
 - Scope encrypted-backup Git commits to literal current and previous manifest artifacts, preserve unrelated staging, and reject backup/source/identity overlaps before writes.

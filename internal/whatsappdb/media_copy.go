@@ -26,7 +26,9 @@ func sourceMediaRoot(sourceRoot, src string) (string, error) {
 		if src != root && mediafile.Within(root, src) {
 			// Message itself must not redirect the selected media root.
 			relative, _ := filepath.Rel(sourceRoot, root)
-			for current := root; current != sourceRoot; current = filepath.Dir(current) {
+			current := sourceRoot
+			for _, part := range strings.Split(relative, string(filepath.Separator)) {
+				current = filepath.Join(current, part)
 				info, err := os.Lstat(current)
 				if os.IsNotExist(err) {
 					continue

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -14,6 +15,84 @@ type exportBarrier struct {
 	storedb.DBTX
 	calls  int
 	commit func()
+}
+
+func TestAuditExportErrorsReturnNoPartialSnapshot(t *testing.T) {
+	for _, stage := range []string{"contacts", "chats", "groups", "participants", "messages", "revisions", "source-binding", "revision-scan", "canceled"} {
+		t.Run(stage, func(t *testing.T) {
+			ctx := context.Background()
+			st, err := Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = st.Close() }()
+			seed := SnapshotData{
+				SourceStoreIdentity: "wa-store:fixture", AccountIdentity: "wa-account:fixture",
+				Contacts: []Contact{{JID: "person"}}, Chats: []Chat{{JID: "chat"}},
+				Groups: []Group{{JID: "group"}}, Participants: []GroupParticipant{{GroupJID: "group", UserJID: "person"}},
+				Messages: []Message{{SourcePK: 1, ChatJID: "chat", MessageID: "message", Text: "preserved"}},
+			}
+			if err := st.ImportSnapshot(ctx, seed, "synthetic", time.Unix(1, 0)); err != nil {
+				t.Fatal(err)
+			}
+			var query string
+			switch stage {
+			case "contacts":
+				query = "drop table contacts"
+			case "chats":
+				query = "drop table chats"
+			case "groups":
+				query = "drop table groups"
+			case "participants":
+				query = "drop table group_participants"
+			case "messages":
+				query = "drop table messages"
+			case "revisions":
+				query = "drop table message_revisions"
+			case "source-binding":
+				query = "alter table sync_state rename to retained_sync_state"
+			case "revision-scan":
+				query = "insert into message_revisions(event_id,payload_json,recorded_at,event_source,reason) values('wa:1','{}','not-an-integer','synthetic','edit')"
+			}
+			if query != "" {
+				if _, err := st.db.ExecContext(ctx, query); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Read-back before/after proves the failed read transaction changes no surviving state.
+			bindingsQuery := `select group_concat(key || '=' || value, '|') from (select key,value from sync_state order by key)`
+			if stage == "source-binding" {
+				bindingsQuery = `select group_concat(key || '=' || value, '|') from (select key,value from retained_sync_state order by key)`
+			}
+			var before string
+			if err := st.db.QueryRowContext(ctx, bindingsQuery).Scan(&before); err != nil {
+				t.Fatal(err)
+			}
+			exportCtx := ctx
+			if stage == "canceled" {
+				var cancel context.CancelFunc
+				exportCtx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+			got, err := st.ExportAll(exportCtx)
+			if err == nil || !reflect.DeepEqual(got, SnapshotData{}) {
+				t.Fatalf("partial snapshot on %s failure: %+v, %v", stage, got, err)
+			}
+			var after string
+			if err := st.db.QueryRowContext(ctx, bindingsQuery).Scan(&after); err != nil || before != after {
+				t.Fatalf("surviving bindings changed: %q -> %q, %v", before, after, err)
+			}
+			if stage != "messages" {
+				var text string
+				if err := st.db.QueryRowContext(ctx, `select text from messages where source_pk=1`).Scan(&text); err != nil || text != "preserved" {
+					t.Fatalf("surviving message changed: %q, %v", text, err)
+				}
+			}
+			if _, err := st.db.ExecContext(ctx, `create table export_probe(value text)`); err != nil {
+				t.Fatalf("connection not usable after rollback: %v", err)
+			}
+		})
+	}
 }
 
 func (b *exportBarrier) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {

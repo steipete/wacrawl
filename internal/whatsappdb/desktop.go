@@ -498,6 +498,23 @@ func canonicalSourcePath(path string) (string, error) {
 }
 
 func copyArchiveMedia(messages []store.Message, sourceRoot, mediaRoot string) (int, int, error) {
+	// Validate the whole batch before publishing even the first valid object.
+	for _, message := range messages {
+		if message.SourceMediaPathRejected {
+			return 0, 0, errors.New("source media path was rejected; import without copying media to retain metadata")
+		}
+		src := strings.TrimSpace(message.MediaPath)
+		if src == "" {
+			continue
+		}
+		root, err := sourceMediaRoot(sourceRoot, src)
+		if err != nil {
+			return 0, 0, err
+		}
+		if _, err := mediafile.Stat(root, src); err != nil && !os.IsNotExist(err) {
+			return 0, 0, err
+		}
+	}
 	var err error
 	mediaRoot, err = prepareMediaRoot(sourceRoot, mediaRoot)
 	if err != nil {
@@ -860,16 +877,7 @@ order by m.ZMESSAGEDATE asc, m.Z_PK asc`)
 		m.MediaTitle = firstNonEmpty(mediaTitle, vcardName)
 		if mediaPath != "" {
 			m.MediaPath = resolveDesktopMediaPath(sourceRoot, mediaPath)
-			if m.MediaPath == "" {
-				return nil, 0, errors.New("source media path is outside Message/Media and Media")
-			}
-			root, err := sourceMediaRoot(sourceRoot, m.MediaPath)
-			if err != nil {
-				return nil, 0, err
-			}
-			if _, err := mediafile.Stat(root, m.MediaPath); err != nil && !os.IsNotExist(err) {
-				return nil, 0, err
-			}
+			m.SourceMediaPathRejected = m.MediaPath == ""
 		}
 		m.MediaURL = mediaURL
 		m.SenderJID, m.SenderName = sender(m.FromMe, m.ChatJID, fromJID, toJID, pushName, memberJID, memberName, memberFirst, names)
@@ -893,18 +901,22 @@ func resolveDesktopMediaPath(sourceRoot, dbPath string) string {
 	if rel == "" {
 		return ""
 	}
-	primary := filepath.Join(sourceRoot, rel)
-	if firstPathElement(rel) != "Media" {
-		return primary
+	candidates := []string{filepath.Join(sourceRoot, rel)}
+	if firstPathElement(rel) == "Media" {
+		candidates = append([]string{filepath.Join(sourceRoot, "Message", rel)}, candidates...)
 	}
-	messageMedia := filepath.Join(sourceRoot, "Message", rel)
-	if _, err := os.Stat(messageMedia); err == nil {
-		return messageMedia
+	for _, candidate := range candidates {
+		root, err := sourceMediaRoot(sourceRoot, candidate)
+		if err != nil {
+			return ""
+		}
+		if _, err := mediafile.Stat(root, candidate); err == nil {
+			return candidate
+		} else if !os.IsNotExist(err) {
+			return ""
+		}
 	}
-	if _, err := os.Stat(primary); err == nil {
-		return primary
-	}
-	return messageMedia
+	return candidates[0]
 }
 
 func cleanDesktopMediaRel(path string) string {

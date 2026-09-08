@@ -48,7 +48,7 @@ func ensureRepo(ctx context.Context, cfg Config) error {
 
 func ensureRepoForWrite(ctx context.Context, cfg Config) error {
 	if _, err := os.Stat(filepath.Join(cfg.Repo, ".git")); err == nil {
-		return mirror.EnsureRepo(ctx, mirrorOptions(cfg))
+		return mirror.EnsureRepo(ctx, syncOptions(cfg))
 	}
 	return ensureRepo(ctx, cfg)
 }

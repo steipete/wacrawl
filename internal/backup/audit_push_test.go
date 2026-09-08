@@ -1,13 +1,105 @@
 package backup
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestAuditBackupPreservesEstablishedOrigin(t *testing.T) {
+	for _, retry := range []bool{false, true} {
+		t.Run(fmt.Sprint("retry-", retry), func(t *testing.T) {
+			ctx := context.Background()
+			parent := t.TempDir()
+			remoteA, remoteB := filepath.Join(parent, "a.git"), filepath.Join(parent, "b.git")
+			initBareRemote(t, remoteA)
+			initBareRemote(t, remoteB)
+			opts := Options{
+				Repo: filepath.Join(parent, "repo"), Remote: remoteA,
+				Identity: filepath.Join(parent, "age.key"), ConfigPath: filepath.Join(parent, "backup.json"),
+			}
+			if _, _, err := Init(ctx, opts); err != nil {
+				t.Fatal(err)
+			}
+			st := openFixtureStore(t, "archive.db")
+			opts.Push = true
+			if retry {
+				hook := filepath.Join(remoteA, "hooks", "pre-receive")
+				if err := os.WriteFile(hook, []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil { // #nosec G306 -- owner-only executable refusal hook in this test's temp bare remote.
+					t.Fatal(err)
+				}
+				if _, err := Push(ctx, st, opts); err == nil {
+					t.Fatal("expected remote refusal")
+				}
+				if err := os.Remove(hook); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(filepath.Join(opts.Repo, "unrelated.txt"), []byte("staged sentinel"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runGit(t, opts.Repo, "add", "unrelated.txt")
+			index := auditGitBytes(t, opts.Repo, "diff", "--cached", "--binary")
+			trace := filepath.Join(parent, "trace.log")
+			t.Setenv("GIT_TRACE", trace)
+			opts.Remote = remoteB
+			result, err := Push(ctx, st, opts)
+			t.Setenv("GIT_TRACE", "")
+			if err != nil || result.Changed == retry {
+				t.Fatalf("push retry=%v: %+v, %v", retry, result, err)
+			}
+			for _, args := range [][]string{{"remote", "get-url", "origin"}, {"remote", "get-url", "--push", "origin"}} {
+				if got := strings.TrimSpace(string(auditGitBytes(t, opts.Repo, args...))); got != remoteA {
+					t.Errorf("origin changed to %q", got)
+				}
+			}
+			if !bytes.Equal(index, auditGitBytes(t, opts.Repo, "diff", "--cached", "--binary")) {
+				t.Fatal("unrelated staged entry changed")
+			}
+			if !bytes.Equal(auditGitBytes(t, opts.Repo, "rev-parse", "HEAD"), auditGitBytes(t, remoteA, "rev-parse", "refs/heads/main")) {
+				t.Fatal("established remote did not receive local HEAD")
+			}
+			if refs := auditGitBytes(t, remoteB, "for-each-ref"); len(refs) != 0 {
+				t.Fatalf("stale configured remote received refs: %s", refs)
+			}
+			data, err := os.ReadFile(trace) // #nosec G304 -- fixed trace.log in this test's temp directory, written by its synthetic Git operations.
+			if err != nil || bytes.Contains(data, []byte(remoteB)) || !bytes.Contains(data, []byte("receive-pack")) {
+				t.Fatalf("unexpected Git transport trace: %s, %v", data, err)
+			}
+		})
+	}
+}
+
+func TestAuditBackupDoesNotAdoptMissingOrigin(t *testing.T) {
+	parent := t.TempDir()
+	remote := filepath.Join(parent, "remote.git")
+	initBareRemote(t, remote)
+	cfg := Config{Repo: filepath.Join(parent, "repo"), Remote: remote}
+	if err := ensureRepoForWrite(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, cfg.Repo, "remote", "remove", "origin")
+	if err := ensureRepoForWrite(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got := auditGitBytes(t, cfg.Repo, "remote"); len(got) != 0 {
+		t.Fatalf("adopted missing origin: %s", got)
+	}
+}
+
+func auditGitBytes(t *testing.T, repo string, args ...string) []byte {
+	t.Helper()
+	out, err := scopeGit(context.Background(), repo, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
 
 func TestAuditBackupUnchangedRetryPublishesPendingCommit(t *testing.T) {
 	ctx := context.Background()

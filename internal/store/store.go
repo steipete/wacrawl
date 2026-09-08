@@ -173,7 +173,9 @@ type Message struct {
 	Starred        bool      `json:"starred,omitempty"`
 	Snippet        string    `json:"snippet,omitempty"`
 	SourceTextNull bool      `json:"-"`
-	storedUnix     int64
+	// Rejected optional cache paths are not evidence of a cleared source payload.
+	SourceMediaPathRejected bool `json:"-"`
+	storedUnix              int64
 }
 
 type MessageRevision struct {
@@ -893,7 +895,7 @@ func reusedReactionIdentity(message Message) (string, int64) {
 }
 
 func upsertMessage(ctx context.Context, tx *sql.Tx, m Message, observedAt time.Time, mediaRoots ...string) error {
-	sourcePayloadCleared := m.SourceTextNull && m.RawType == 0 && m.MediaTitle == "" && m.MediaType == "" && m.MediaPath == "" && m.MediaURL == "" && m.DeletedAt.IsZero()
+	sourcePayloadCleared := m.SourceTextNull && !m.SourceMediaPathRejected && m.RawType == 0 && m.MediaTitle == "" && m.MediaType == "" && m.MediaPath == "" && m.MediaURL == "" && m.DeletedAt.IsZero()
 	preserveExistingFTS := false
 	if m.EventID == "" {
 		m.EventID = messageEventID(m.SourcePK)
