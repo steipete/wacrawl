@@ -260,7 +260,7 @@ func ownedPathspecs(ctx context.Context, cfg Config, manifests ...ckbackup.Manif
 	var specs []string
 	for _, name := range names {
 		if name == "README.md" {
-			content, err := os.ReadFile(filepath.Join(cfg.Repo, name))
+			content, err := os.ReadFile(filepath.Join(cfg.Repo, name)) // #nosec G304 -- fixed README.md entry checked by validateOwnedFiles above; compare app-owned bytes.
 			if err != nil && !errors.Is(err, os.ErrNotExist) {
 				return nil, err
 			}
@@ -347,7 +347,7 @@ func validateSnapshotInputs(ctx context.Context, cfg Config, manifest ckbackup.M
 }
 
 func scopeGit(ctx context.Context, repo string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd := exec.CommandContext(ctx, "git", args...) // #nosec G204 -- internal callers supply fixed commands, Git-derived refs and literal pathspecs; no shell, operator-trusted Git config.
 	cmd.Dir = repo
 	var out boundedGitOutput
 	cmd.Stdout = &out

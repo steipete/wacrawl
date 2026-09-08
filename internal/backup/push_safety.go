@@ -277,7 +277,7 @@ func verifyGitCiphertext(ctx context.Context, repo, ref, name string, manifest c
 	if err != nil || expected < 1 || actual != expected {
 		return errors.New("unpublished ciphertext size differs from its manifest")
 	}
-	cmd := exec.CommandContext(ctx, "git", "cat-file", "blob", ref+":"+name)
+	cmd := exec.CommandContext(ctx, "git", "cat-file", "blob", ref+":"+name) // #nosec G204 -- Git-derived ref and validated owned path, checked for regular blob mode and manifest size; no shell.
 	cmd.Dir = repo
 	out, err := cmd.StdoutPipe()
 	if err != nil {

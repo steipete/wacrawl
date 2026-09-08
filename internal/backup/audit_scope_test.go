@@ -74,7 +74,7 @@ func TestAuditBackupRejectsFileSourceHardlink(t *testing.T) {
 	if err := validateWriteLayout(cfg, Options{SourcePath: source, ConfigPath: config}); err == nil {
 		t.Fatal("accepted a config hardlink to the selected source file")
 	}
-	got, err := os.ReadFile(source)
+	got, err := os.ReadFile(source) // #nosec G304 -- fixed source.db sentinel created in t.TempDir; verifies hardlink refusal preserved its bytes.
 	if err != nil || string(got) != string(sentinel) {
 		t.Fatalf("source changed: %q %v", got, err)
 	}
@@ -319,7 +319,7 @@ func TestAuditBackupPreservesUnownedCiphertext(t *testing.T) {
 	if _, err := Push(ctx, openFixtureStore(t, "archive.db"), opts); err == nil || !strings.Contains(err.Error(), "unowned ciphertext") {
 		t.Fatalf("unowned cleanup was not blocked: %v", err)
 	}
-	got, err := os.ReadFile(unowned)
+	got, err := os.ReadFile(unowned) // #nosec G304 -- fixed temp data/unowned.age sentinel verifies the refused push left its bytes unchanged.
 	if err != nil || string(got) != string(content) {
 		t.Fatalf("unowned file changed: %q, %v", got, err)
 	}

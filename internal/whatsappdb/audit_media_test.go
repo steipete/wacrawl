@@ -146,7 +146,7 @@ func TestAuditMediaRefreshAndBackupRestoreRetainLegacyReference(t *testing.T) {
 		}
 	}
 	remote := filepath.Join(t.TempDir(), "remote.git")
-	if output, err := exec.Command("git", "init", "--bare", remote).CombinedOutput(); err != nil {
+	if output, err := exec.Command("git", "init", "--bare", remote).CombinedOutput(); err != nil { // #nosec G204 -- fixed Git command creates this test's absolute temp bare-repository path.
 		t.Fatalf("init local remote: %s %v", output, err)
 	}
 	opts := backup.Options{
@@ -172,7 +172,7 @@ func TestAuditMediaRefreshAndBackupRestoreRetainLegacyReference(t *testing.T) {
 		t.Fatal(err)
 	}
 	restoredObject := auditMediaObjectPath(filepath.Join(filepath.Dir(restored.Path()), "media"), []byte("image"))
-	if data, err := os.ReadFile(restoredObject); err != nil || string(data) != "image" {
+	if data, err := os.ReadFile(restoredObject); err != nil || string(data) != "image" { // #nosec G304 -- expected content-addressed path beneath this test's temp restored archive.
 		t.Fatal("new content-addressed logical path did not restore")
 	}
 	for _, message := range got.Messages {
@@ -234,10 +234,36 @@ func TestAuditMediaAttachmentAndTombstoneOrdering(t *testing.T) {
 		t.Fatal(err)
 	}
 	again, err := st.ExportAll(ctx)
-	if err != nil || !reflect.DeepEqual(deleted.Messages, again.Messages) {
-		t.Fatal("copy revived a tombstoned message")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if data, err := os.ReadFile(oldPath); err != nil || string(data) != "image" {
+	if len(deleted.Messages) != len(again.Messages) {
+		t.Fatal("copy changed the message set")
+	}
+	targets := 0
+	for index, before := range deleted.Messages {
+		after := again.Messages[index]
+		if before.MessageID == "group-image" {
+			targets++
+			if before.DeletedAt.IsZero() || before.MediaPath != "" {
+				t.Fatal("expected the target message to remain tombstoned without media")
+			}
+		}
+		// Live rows record each observation; deleted rows must stay unchanged.
+		if before.DeletedAt.IsZero() {
+			after.LastSeenAt = before.LastSeenAt
+		}
+		if !reflect.DeepEqual(before, after) {
+			t.Fatalf("copy changed canonical message or tombstone: event=%s before=%+v after=%+v", before.EventID, before, after)
+		}
+	}
+	if targets != 1 {
+		t.Fatalf("expected one target tombstone, got %d", targets)
+	}
+	if !reflect.DeepEqual(deleted.Revisions, again.Revisions) {
+		t.Fatal("copy changed revision history")
+	}
+	if data, err := os.ReadFile(oldPath); err != nil || string(data) != "image" { // #nosec G304 -- expected object in this test's temp archive checks historical media bytes.
 		t.Fatal("tombstone removed historical media")
 	}
 }
@@ -289,11 +315,11 @@ func TestAuditMediaPublicationFailuresNeverReplacePriorObject(t *testing.T) {
 			if _, err := copyMediaFile(source, src, root); err == nil {
 				t.Fatal("expected copy failure")
 			}
-			got, err := os.ReadFile(dest)
+			got, err := os.ReadFile(dest) // #nosec G304 -- destination object or hardlink created in this test's temp root before injected copy failure.
 			if err != nil || !bytes.Equal(got, prior) {
 				t.Fatalf("prior destination changed: %q %v", got, err)
 			}
-			if got, err := os.ReadFile(src); err != nil || string(got) != "image" {
+			if got, err := os.ReadFile(src); err != nil || string(got) != "image" { // #nosec G304 -- fixed temp media.jpg written by this test; checks source preservation.
 				t.Fatal("source changed")
 			}
 		})
@@ -350,7 +376,7 @@ func TestAuditMediaStageExcludedAndFailuresPreserveArchive(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(before, after) {
 		t.Fatal("database failure changed archive references")
 	}
-	data, err := os.ReadFile(oldObject)
+	data, err := os.ReadFile(oldObject) // #nosec G304 -- expected prior object in the fixture's temp archive after copy and database failures.
 	if err != nil || !bytes.Equal(data, []byte("image")) {
 		t.Fatal("previous media object changed")
 	}
@@ -384,7 +410,7 @@ func TestAuditMediaRejectsSourceOverlapAndEscapes(t *testing.T) {
 	if _, err := ImportWithOptions(context.Background(), st, ImportOptions{SourcePath: source, CopyMedia: true}); err == nil {
 		t.Fatal("accepted a source media symlink")
 	}
-	if data, err := os.ReadFile(outside); err != nil || string(data) != "outside sentinel" {
+	if data, err := os.ReadFile(outside); err != nil || string(data) != "outside sentinel" { // #nosec G304 -- separate t.TempDir sentinel created by this test before rejecting a symlink to it.
 		t.Fatal("outside file changed")
 	}
 }

@@ -49,7 +49,11 @@ func TestAuditMetadataReadCommandsDoNotSync(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer st.Close()
+			defer func() {
+				if err := st.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
 			status, err := st.Status(ctx)
 			if err != nil {
 				t.Fatal(err)
