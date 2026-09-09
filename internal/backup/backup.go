@@ -65,8 +65,19 @@ func Init(ctx context.Context, opts Options) (Config, string, error) {
 	if err != nil {
 		return Config{}, "", err
 	}
+	if err := validateWriteLayout(cfg, opts); err != nil {
+		return Config{}, "", err
+	}
+	if err := validateOwnedFiles(cfg, []string{"README.md", "manifest.json"}); err != nil {
+		return Config{}, "", err
+	}
 	recipient, err := EnsureIdentity(cfg.Identity)
 	if err != nil {
+		return Config{}, "", err
+	}
+	// Creation exposes filesystem aliases (including case-equivalent names).
+	// Recheck before saving config or initializing a publication repository.
+	if err := validateWriteLayout(cfg, opts); err != nil {
 		return Config{}, "", err
 	}
 	if len(cfg.Recipients) == 0 {
@@ -75,7 +86,13 @@ func Init(ctx context.Context, opts Options) (Config, string, error) {
 	if err := SaveConfig(opts.ConfigPath, cfg); err != nil {
 		return Config{}, "", err
 	}
-	if err := ensureRepo(ctx, cfg); err != nil {
+	if err := validateWriteLayout(cfg, opts); err != nil {
+		return Config{}, "", err
+	}
+	if err := ensureRepoForWrite(ctx, cfg); err != nil {
+		return Config{}, "", err
+	}
+	if err := validateOwnedFiles(cfg, []string{"README.md", "manifest.json"}); err != nil {
 		return Config{}, "", err
 	}
 	if err := writeBackupReadme(cfg.Repo); err != nil {
@@ -90,6 +107,10 @@ func Push(ctx context.Context, st *store.Store, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	opts.ArchivePath = st.Path()
+	if err := validateWriteLayout(cfg, opts); err != nil {
+		return Result{}, err
+	}
 	if len(cfg.Recipients) == 0 {
 		recipient, err := RecipientFromIdentity(cfg.Identity)
 		if err != nil {
@@ -97,16 +118,28 @@ func Push(ctx context.Context, st *store.Store, opts Options) (Result, error) {
 		}
 		cfg.Recipients = []string{recipient}
 	}
-	if err := ensureRepo(ctx, cfg); err != nil {
+	if err := ensureRepoForWrite(ctx, cfg); err != nil {
 		return Result{}, err
 	}
 	if err := validateSnapshotTag(ctx, cfg.Repo, opts.Tag); err != nil {
 		return Result{}, err
 	}
+	if err := validateOwnedFiles(cfg, []string{"manifest.json"}); err != nil {
+		return Result{}, err
+	}
+	oldManifest, err := readManifest(cfg.Repo)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return Result{}, err
+	}
+	if err == nil && (oldManifest.Format != formatVersion || !oldManifest.Encrypted) {
+		return Result{}, errors.New("previous backup is not a supported encrypted snapshot")
+	}
+	if err := validateSnapshotInputs(ctx, cfg, toCrawlkitManifest(oldManifest)); err != nil {
+		return Result{}, err
+	}
 	if err := writeBackupReadme(cfg.Repo); err != nil {
 		return Result{}, err
 	}
-	oldManifest, _ := readManifest(cfg.Repo)
 	data, err := st.ExportAll(ctx)
 	if err != nil {
 		return Result{}, err
@@ -123,16 +156,21 @@ func Push(ctx context.Context, st *store.Store, opts Options) (Result, error) {
 		return Result{}, err
 	}
 	pushWithTag := opts.Push && strings.TrimSpace(opts.Tag) != ""
-	changed, err := commitAndPush(ctx, cfg, "sync: update encrypted wacrawl backup", opts.Push && !pushWithTag)
+	changed, err := commitAndPush(ctx, cfg, "sync: update encrypted wacrawl backup", opts.Push && !pushWithTag, toCrawlkitManifest(oldManifest), toCrawlkitManifest(manifest))
 	if err != nil {
 		return Result{}, err
+	}
+	if pushWithTag {
+		if err := verifyPendingHistory(ctx, cfg); err != nil {
+			return Result{}, err
+		}
 	}
 	tag, err := tagSnapshot(ctx, cfg, opts.Tag)
 	if err != nil {
 		return Result{}, err
 	}
 	if pushWithTag {
-		if err := mirror.PushCurrentSnapshot(ctx, mirrorOptions(cfg), tag); err != nil {
+		if err := mirror.PushAtomic(ctx, mirrorOptions(cfg), "HEAD", "refs/tags/"+tag); err != nil {
 			return Result{}, err
 		}
 	}
@@ -236,28 +274,14 @@ func writeSnapshot(ctx context.Context, cfg Config, data store.SnapshotData, fil
 		{Table: "message_revisions", CountKey: "message_revisions", Path: "data/message_revisions.jsonl.gz.age", Rows: data.Revisions},
 		{Table: "archive_identity", CountKey: "archive_identity", Path: "data/archive_identity.jsonl.gz.age", Rows: identities},
 	}
+	if len(data.Messages) == 0 {
+		shards = append(shards, ckbackup.Shard{Table: "messages", Path: "data/messages/unknown/00.jsonl.gz.age", Rows: data.Messages})
+	}
 	for _, shard := range messageShards(data.Messages) {
 		shards = append(shards, ckbackup.Shard{Table: "messages", Path: shard.path, Rows: shard.messages})
 	}
-	sharedOld := toCrawlkitManifest(old)
-	if len(data.Messages) == 0 {
-		delete(sharedOld.Counts, "messages")
-	}
-	manifest, err := ckbackup.WriteSnapshotWithFiles(ctx, crawlkitConfig(cfg), shards, files, sharedOld)
+	manifest, err := ckbackup.WriteSnapshotWithFiles(ctx, crawlkitConfig(cfg), shards, files, toCrawlkitManifest(old))
 	if err != nil {
-		return Manifest{}, err
-	}
-	manifest.Counts["contacts"] = len(data.Contacts)
-	manifest.Counts["chats"] = len(data.Chats)
-	manifest.Counts["groups"] = len(data.Groups)
-	manifest.Counts["participants"] = len(data.Participants)
-	manifest.Counts["messages"] = len(data.Messages)
-	manifest.Counts["message_revisions"] = len(data.Revisions)
-	manifest.Counts["archive_identity"] = len(identities)
-	if ckbackup.EquivalentManifest(toCrawlkitManifest(old), manifest) {
-		return old, nil
-	}
-	if err := ckbackup.WriteManifest(cfg.Repo, manifest); err != nil {
 		return Manifest{}, err
 	}
 	return fromCrawlkitManifest(manifest), nil
@@ -528,12 +552,7 @@ func replaceMediaDuring(staged, target string, commit func() error) error {
 	return nil
 }
 
-func writeBackupReadme(repo string) error {
-	path := filepath.Join(repo, "README.md")
-	if _, err := os.Stat(path); err == nil {
-		return nil
-	}
-	const body = `# backup-wacrawl
+const backupReadme = `# backup-wacrawl
 
 Encrypted Git backup for a local wacrawl archive.
 
@@ -585,9 +604,10 @@ wacrawl backup push
 wacrawl backup push --tag snapshot/before-phone-migration
 ` + "```" + `
 
-The command pulls/rebases this checkout, refreshes the local wacrawl archive
-according to the normal sync policy, writes encrypted row shards and copied
-media blobs, updates the manifest, commits, and pushes this repository.
+The command refreshes the local wacrawl archive according to the normal sync
+policy, writes encrypted shards and media blobs, updates the manifest, and
+commits only owned backup artifacts. Explicit pushes verify unpublished history
+first. Divergence requires explicit handling; pushing does not rebase commits.
 
 Every changed backup is a Git commit. Optional tags name important checkpoints;
 tag names are visible Git metadata and should not contain sensitive text.
@@ -618,5 +638,11 @@ wacrawl --sync never status
 Do not commit the age identity. Only public ` + "`age1...`" + ` recipients belong in
 config; ` + "`AGE-SECRET-KEY-...`" + ` values must stay local or in a password manager.
 `
-	return os.WriteFile(path, []byte(body), 0o600)
+
+func writeBackupReadme(repo string) error {
+	path := filepath.Join(repo, "README.md")
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	}
+	return os.WriteFile(path, []byte(backupReadme), 0o600)
 }

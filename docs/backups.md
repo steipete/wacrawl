@@ -54,7 +54,7 @@ wacrawl backup status
 wacrawl backup snapshots
 ```
 
-`backup push` pulls and rebases the configured checkout, applies the normal read-time sync policy, exports stable JSONL, compresses and encrypts each shard for every recipient, updates the manifest, removes stale encrypted shards, commits, and pushes. It includes copied files already under the archive's `media/` directory; run `wacrawl sync --copy-media` first to capture media still available from WhatsApp Desktop. The backup command never reads media directly from the WhatsApp container.
+`backup push` does not fetch or rebase an existing checkout. It applies the normal read-time sync policy, exports stable JSONL, compresses and encrypts each shard for every recipient, updates the manifest, removes stale encrypted shards, and commits only owned backup artifacts before checking unpublished history and attempting publication. It includes copied files already under the archive's `media/` directory; run `wacrawl sync --copy-media` first to capture media still available from WhatsApp Desktop. The backup command never reads media directly from the WhatsApp container.
 
 Useful variants:
 
@@ -71,7 +71,7 @@ wacrawl backup push --tag snapshot/before-phone-migration
 
 Re-running `backup push` without archive changes leaves Git clean. When `--tag` is used without a data change, the tag points to the existing current snapshot; existing tags are never moved. The command reports the checkout path, whether data changed, encryption state, shard count, message count, and copied-media count. Tag names and commit metadata remain visible to anyone who can inspect the repository, so keep tag names non-sensitive.
 
-You do not need to run Git manually for the normal flow. Push handles fetch and rebase, while pull updates the current archive branch. `backup pull --ref` fetches refs and reads the selected Git objects without checking them out or rewriting the backup checkout.
+A refused push can leave a completed local snapshot commit. Re-running an unchanged push retries publication after the same history checks; it does not repair divergence or unverified history. See the recovery guidance below before changing the checkout. `backup pull --ref` fetches refs and reads the selected Git objects without checking them out or rewriting the backup checkout, but still replaces the configured archive.
 
 `backup status` reads only the cleartext manifest. `backup snapshots --limit N` lists the newest manifest-changing commits and their tags.
 
@@ -122,7 +122,13 @@ wacrawl backup pull
 wacrawl --sync never status
 ```
 
-If decryption fails, the configured identity does not match any recipient used for the shards. If Git push fails, fix the repository permissions; the archive payload is already encrypted before upload.
+If decryption fails, the configured identity does not match any recipient used for the shards.
+
+For a refused push on an existing machine, distinguish an unknown remote baseline, divergent history, unverified unpublished paths, and repository permission failures. The command does not fetch or rebase to resolve these conditions, and a completed local snapshot commit may remain unpublished.
+
+Preserve the original checkout, including its index, local commits and tags, together with the archive database, copied media, backup configuration and private identity. Inspect the reported history or path and confirm the intended remote before retrying. Resetting, rebasing, force-pushing, or pulling a backup over the primary archive is not a general recovery procedure.
+
+After deliberately choosing the intended remote and archive, a separate fresh checkout and configuration may be appropriate. Publishing a fresh snapshot does not merge divergent archive contents or transfer every old unpublished commit and tag. Keep the original recovery material intact; the new-machine restore steps above are not instructions to overwrite an existing primary archive.
 
 ## Encryption flow
 

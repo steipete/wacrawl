@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Dependencies
+
+- Update CrawlKit to v0.15.0 for snapshot integrity and versioned encrypted backup generations, retaining the existing Go minimum and SQLite runtime pair.
+
+### Fixed
+
+- Accept the exact legacy generated backup README in unpublished history without rewriting it, while still refusing edited content and unsafe file modes.
+- Correct backup push and recovery guidance: existing checkouts are not fetched or rebased, and publication refusal can retain a local snapshot commit.
+- Preserve an existing backup checkout's origin when configuration names a different remote, including unchanged push retries.
+- Retain message metadata when an optional local attachment path is invalid, without fabricating a deletion; reject the entire media-copy batch before copying any object.
+
+- Publish explicit zero-message backup shards with the final counts so repeated empty backups remain unchanged, including with generation-based CrawlKit writers.
+- Preserve source and previously archived media with confined reads, sibling staging, immutable verified content-addressed copies, and attachment-aware reference retention on normal refresh.
+- Scope encrypted-backup Git commits to literal current and previous manifest artifacts, preserve unrelated staging, and reject backup/source/identity overlaps before writes.
+- Retry explicitly requested backup pushes even when unchanged, checking unpublished history first and refusing unverified paths without rewriting commits.
+- Read all backup rows and archive bindings from one SQLite snapshot.
+- Keep machine-advertised search and SQL commands from automatically syncing the archive, and advertise the actual JSON backup configuration path.
+
 ## 0.3.11 - 2026-09-07
 
 **Highlights:** Keep SQLite paired with its supported runtime and catch incompatible dependency updates before release.

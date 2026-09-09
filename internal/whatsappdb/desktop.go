@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -16,6 +15,7 @@ import (
 	"time"
 
 	"github.com/openclaw/crawlkit/cache"
+	"github.com/openclaw/wacrawl/internal/mediafile"
 	"github.com/openclaw/wacrawl/internal/sqlitedsn"
 	"github.com/openclaw/wacrawl/internal/store"
 	_ "modernc.org/sqlite"
@@ -413,6 +413,7 @@ func ImportWithOptions(ctx context.Context, st *store.Store, opts ImportOptions)
 		return store.ImportStats{}, err
 	}
 	stats := store.ImportStats{SourcePath: sourcePath, SourceIdentity: sourceIdentity, AdoptSource: opts.AdoptSource, DBPath: st.Path(), StartedAt: time.Now().UTC()}
+	sourcePath = sourceIdentity
 	stats.SourceSnapshotAt = stats.StartedAt
 	snap, err := SnapshotPath(sourcePath)
 	if err != nil {
@@ -445,11 +446,29 @@ func ImportWithOptions(ctx context.Context, st *store.Store, opts ImportOptions)
 	if err := st.ValidateImport(ctx, stats, data.Messages, opts.Restore); err != nil {
 		return stats, err
 	}
-	if opts.CopyMedia {
-		mediaRoot := opts.MediaRoot
-		if strings.TrimSpace(mediaRoot) == "" {
-			mediaRoot = filepath.Join(filepath.Dir(st.Path()), "media")
+	mediaRoot := opts.MediaRoot
+	if strings.TrimSpace(mediaRoot) == "" {
+		mediaRoot = filepath.Join(filepath.Dir(st.Path()), "media")
+	}
+	mediaRoot, err = prepareMediaRoot(sourcePath, mediaRoot)
+	if err != nil {
+		if opts.CopyMedia {
+			return stats, err
 		}
+		mediaRoot = ""
+	}
+	archivePath, err := mediafile.Resolve(st.Path())
+	if err != nil {
+		return stats, err
+	}
+	if mediaRoot != "" && containsMediaPath(mediaRoot, archivePath) {
+		if opts.CopyMedia {
+			return stats, errors.New("archive media root overlaps the archive database")
+		}
+		mediaRoot = ""
+	}
+	stats.MediaRoot = mediaRoot
+	if opts.CopyMedia {
 		copied, missing, err := copyArchiveMedia(data.Messages, sourcePath, mediaRoot)
 		if err != nil {
 			return stats, err
@@ -471,17 +490,36 @@ func canonicalSourcePath(path string) (string, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", nil
 	}
-	absolute, err := filepath.Abs(path)
+	absolute, err := mediafile.Resolve(path)
 	if err != nil {
 		return "", fmt.Errorf("resolve desktop path: %w", err)
 	}
-	if evaluated, err := filepath.EvalSymlinks(absolute); err == nil {
-		absolute = evaluated
-	}
-	return filepath.Clean(absolute), nil
+	return filepath.Abs(absolute)
 }
 
 func copyArchiveMedia(messages []store.Message, sourceRoot, mediaRoot string) (int, int, error) {
+	// Validate the whole batch before publishing even the first valid object.
+	for _, message := range messages {
+		if message.SourceMediaPathRejected {
+			return 0, 0, errors.New("source media path was rejected; import without copying media to retain metadata")
+		}
+		src := strings.TrimSpace(message.MediaPath)
+		if src == "" {
+			continue
+		}
+		root, err := sourceMediaRoot(sourceRoot, src)
+		if err != nil {
+			return 0, 0, err
+		}
+		if _, err := mediafile.Stat(root, src); err != nil && !os.IsNotExist(err) {
+			return 0, 0, err
+		}
+	}
+	var err error
+	mediaRoot, err = prepareMediaRoot(sourceRoot, mediaRoot)
+	if err != nil {
+		return 0, 0, err
+	}
 	type result struct {
 		path    string
 		missing bool
@@ -500,12 +538,13 @@ func copyArchiveMedia(messages []store.Message, sourceRoot, mediaRoot string) (i
 			}
 			continue
 		}
-		dest, err := archiveMediaPath(sourceRoot, mediaRoot, src)
+		root, err := sourceMediaRoot(sourceRoot, src)
 		if err != nil {
 			return copied, missing, err
 		}
-		if err := copyMediaFile(src, dest); err != nil {
-			if os.IsNotExist(err) || errors.Is(err, errMediaNotDownloaded) {
+		dest, err := copyMediaFile(root, src, mediaRoot)
+		if err != nil {
+			if errors.Is(err, errMediaMissing) || errors.Is(err, errMediaNotDownloaded) {
 				missing++
 				seen[src] = result{missing: true}
 				continue
@@ -519,65 +558,22 @@ func copyArchiveMedia(messages []store.Message, sourceRoot, mediaRoot string) (i
 	return copied, missing, nil
 }
 
-func archiveMediaPath(sourceRoot, mediaRoot, src string) (string, error) {
-	rel, err := filepath.Rel(sourceRoot, src)
-	if err != nil || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || rel == ".." || filepath.IsAbs(rel) {
-		rel = filepath.Base(src)
-	}
-	rel = filepath.Clean(rel)
-	if rel == "." || rel == string(os.PathSeparator) || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || rel == ".." {
-		return "", fmt.Errorf("invalid media path: %s", src)
-	}
-	dest := filepath.Join(mediaRoot, rel)
-	cleanRoot := filepath.Clean(mediaRoot)
-	cleanDest := filepath.Clean(dest)
-	if cleanDest != cleanRoot && !strings.HasPrefix(cleanDest, cleanRoot+string(os.PathSeparator)) {
-		return "", fmt.Errorf("media path escapes archive root: %s", src)
-	}
-	return cleanDest, nil
-}
-
 // mediaMaterialized reports whether a media file's bytes are already on disk.
 // Tests replace this to simulate macOS SF_DATALESS (iCloud) stubs.
 var (
 	mediaMaterialized    = fileMaterialized
-	openMediaFileForCopy = openMediaFile
+	openMediaFileForCopy = mediafile.Open
 )
 
-var errMediaNotDownloaded = errors.New("media not downloaded locally")
-
-func copyMediaFile(src, dest string) error {
-	info, err := os.Stat(src)
-	if err != nil {
-		return err
-	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("media source is not a regular file: %s", src)
-	}
-	if !mediaMaterialized(info) {
-		return fmt.Errorf("%w: %s", errMediaNotDownloaded, src)
-	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
-		return err
-	}
-	in, err := openMediaFileForCopy(src)
-	if err != nil {
-		return normalizeMediaReadError(src, err)
-	}
-	defer func() { _ = in.Close() }()
-	out, err := os.OpenFile(dest, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600) // #nosec G304 -- destination is confined under the archive media root.
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		_ = out.Close()
-		_ = os.Remove(dest)
-		return normalizeMediaReadError(src, err)
-	}
-	return out.Close()
-}
+var (
+	errMediaNotDownloaded = errors.New("media not downloaded locally")
+	errMediaMissing       = errors.New("source media is missing")
+)
 
 func normalizeMediaReadError(src string, err error) error {
+	if os.IsNotExist(err) {
+		return fmt.Errorf("%w: %s", errMediaMissing, src)
+	}
 	if mediaReadWouldBlock(err) {
 		return fmt.Errorf("%w: %s", errMediaNotDownloaded, src)
 	}
@@ -881,6 +877,7 @@ order by m.ZMESSAGEDATE asc, m.Z_PK asc`)
 		m.MediaTitle = firstNonEmpty(mediaTitle, vcardName)
 		if mediaPath != "" {
 			m.MediaPath = resolveDesktopMediaPath(sourceRoot, mediaPath)
+			m.SourceMediaPathRejected = m.MediaPath == ""
 		}
 		m.MediaURL = mediaURL
 		m.SenderJID, m.SenderName = sender(m.FromMe, m.ChatJID, fromJID, toJID, pushName, memberJID, memberName, memberFirst, names)
@@ -904,36 +901,40 @@ func resolveDesktopMediaPath(sourceRoot, dbPath string) string {
 	if rel == "" {
 		return ""
 	}
-	primary := filepath.Join(sourceRoot, rel)
-	if firstPathElement(rel) != "Media" {
-		return primary
+	candidates := []string{filepath.Join(sourceRoot, rel)}
+	if firstPathElement(rel) == "Media" {
+		candidates = append([]string{filepath.Join(sourceRoot, "Message", rel)}, candidates...)
 	}
-	messageMedia := filepath.Join(sourceRoot, "Message", rel)
-	if _, err := os.Stat(messageMedia); err == nil {
-		return messageMedia
+	for _, candidate := range candidates {
+		root, err := sourceMediaRoot(sourceRoot, candidate)
+		if err != nil {
+			return ""
+		}
+		if _, err := mediafile.Stat(root, candidate); err == nil {
+			return candidate
+		} else if !os.IsNotExist(err) {
+			return ""
+		}
 	}
-	if _, err := os.Stat(primary); err == nil {
-		return primary
-	}
-	return messageMedia
+	return candidates[0]
 }
 
 func cleanDesktopMediaRel(path string) string {
 	rel := filepath.Clean(path)
-	if filepath.IsAbs(rel) {
-		rel = strings.TrimLeft(rel, string(os.PathSeparator))
-		rel = filepath.Clean(rel)
-	}
-	if rel == "." || rel == ".." {
+	if filepath.IsAbs(path) {
 		return ""
 	}
-	if strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-		rel = filepath.Base(rel)
-		if rel == "." || rel == ".." {
+	for _, part := range strings.Split(path, string(filepath.Separator)) {
+		if part == ".." {
 			return ""
 		}
 	}
-	return rel
+	for _, root := range []string{"Media", filepath.Join("Message", "Media")} {
+		if strings.HasPrefix(rel, root+string(filepath.Separator)) {
+			return rel
+		}
+	}
+	return ""
 }
 
 func firstPathElement(path string) string {

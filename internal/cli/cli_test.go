@@ -3,10 +3,12 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -425,7 +427,7 @@ func TestMetadataAdvertisesContactExport(t *testing.T) {
 	if sqlCommand.Mutates || !sqlCommand.JSON {
 		t.Fatalf("sql command = %#v", sqlCommand)
 	}
-	sqlWant := []string{"wacrawl", "--json", "sql"}
+	sqlWant := []string{"wacrawl", "--json", "--sync", "never", "sql"}
 	if !reflect.DeepEqual(sqlCommand.Argv, sqlWant) {
 		t.Fatalf("sql argv = %#v, want %#v", sqlCommand.Argv, sqlWant)
 	}
@@ -813,7 +815,8 @@ func TestBackupCommands(t *testing.T) {
 	if !strings.Contains(stdout.String(), "[launch] now") {
 		t.Fatalf("restored search mismatch:\n%s", stdout.String())
 	}
-	restoredMedia := filepath.Join(filepath.Dir(restoredDB), "media", "Media", "123@g.us", "a", "test.jpg")
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte("image")))
+	restoredMedia := filepath.Join(filepath.Dir(restoredDB), "media", digest[:2], digest)
 	if body, err := os.ReadFile(restoredMedia); err != nil || string(body) != "image" { // #nosec G304 -- test reads its expected temp restore path.
 		t.Fatalf("restored media = %q err=%v", body, err)
 	}

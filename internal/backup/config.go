@@ -23,16 +23,18 @@ type Config struct {
 }
 
 type Options struct {
-	ConfigPath string
-	Repo       string
-	Remote     string
-	Identity   string
-	Recipients []string
-	Push       bool
-	Ref        string
-	Tag        string
-	Limit      int
-	NoMedia    bool
+	ArchivePath string
+	SourcePath  string
+	ConfigPath  string
+	Repo        string
+	Remote      string
+	Identity    string
+	Recipients  []string
+	Push        bool
+	Ref         string
+	Tag         string
+	Limit       int
+	NoMedia     bool
 }
 
 func DefaultConfig() Config {
@@ -73,7 +75,10 @@ func SaveConfig(path string, cfg Config) error {
 	if strings.TrimSpace(path) == "" {
 		path = DefaultConfigPath()
 	}
-	path = expandHome(path)
+	path, err := resolvedPath(expandHome(path))
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
@@ -162,8 +167,14 @@ func ResolveOptions(opts Options) (Config, error) {
 	if len(opts.Recipients) > 0 {
 		cfg.Recipients = opts.Recipients
 	}
-	cfg.Repo = expandHome(cfg.Repo)
-	cfg.Identity = expandHome(cfg.Identity)
+	cfg.Repo, err = resolvedPath(expandHome(cfg.Repo))
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Identity, err = resolvedPath(expandHome(cfg.Identity))
+	if err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
 }
 
@@ -175,7 +186,7 @@ func expandHome(path string) string {
 	}
 	if after, ok := strings.CutPrefix(path, "~/"); ok {
 		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, after)
+			return home + string(filepath.Separator) + after
 		}
 	}
 	return path

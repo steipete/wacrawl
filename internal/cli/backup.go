@@ -56,6 +56,7 @@ func (a *app) runBackupInit(ctx context.Context, args []string) error {
 		return usageErr(errors.New("backup init takes flags only"))
 	}
 	opts.Push = !*noPush
+	opts.ArchivePath, opts.SourcePath = a.dbPath, a.source
 	cfg, recipient, err := backup.Init(ctx, *opts)
 	if err != nil {
 		return err
@@ -82,6 +83,10 @@ func (a *app) runBackupPush(ctx context.Context, args []string) error {
 		return usageErr(errors.New("backup push takes flags only"))
 	}
 	opts.Push = !*noPush
+	opts.ArchivePath, opts.SourcePath = a.dbPath, a.source
+	if err := backup.ValidateWriteOptions(*opts); err != nil {
+		return err
+	}
 	return a.withArchiveStore(ctx, func(st *store.Store) error {
 		result, err := backup.Push(ctx, st, *opts)
 		if err != nil {

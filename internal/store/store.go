@@ -57,6 +57,7 @@ type ImportStats struct {
 	MediaMessages       int       `json:"media_messages"`
 	MediaCopied         int       `json:"media_copied,omitempty"`
 	MediaMissing        int       `json:"media_missing,omitempty"`
+	MediaRoot           string    `json:"-"`
 	StartedAt           time.Time `json:"started_at"`
 	FinishedAt          time.Time `json:"finished_at"`
 }
@@ -172,7 +173,9 @@ type Message struct {
 	Starred        bool      `json:"starred,omitempty"`
 	Snippet        string    `json:"snippet,omitempty"`
 	SourceTextNull bool      `json:"-"`
-	storedUnix     int64
+	// Rejected optional cache paths are not evidence of a cleared source payload.
+	SourceMediaPathRejected bool `json:"-"`
+	storedUnix              int64
 }
 
 type MessageRevision struct {
@@ -489,8 +492,12 @@ last_seen_at=excluded.last_seen_at`,
 			return err
 		}
 	}
+	var mediaRoots []string
+	if !restore && stats.SourceIdentity != "" && stats.MediaRoot != "" {
+		mediaRoots = []string{stats.MediaRoot}
+	}
 	for _, m := range messages {
-		if err := upsertMessage(ctx, tx, m, now); err != nil {
+		if err := upsertMessage(ctx, tx, m, now, mediaRoots...); err != nil {
 			return err
 		}
 	}
@@ -887,8 +894,8 @@ func reusedReactionIdentity(message Message) (string, int64) {
 	return eventID, sourcePK
 }
 
-func upsertMessage(ctx context.Context, tx *sql.Tx, m Message, observedAt time.Time) error {
-	sourcePayloadCleared := m.SourceTextNull && m.RawType == 0 && m.MediaTitle == "" && m.MediaType == "" && m.MediaPath == "" && m.MediaURL == "" && m.DeletedAt.IsZero()
+func upsertMessage(ctx context.Context, tx *sql.Tx, m Message, observedAt time.Time, mediaRoots ...string) error {
+	sourcePayloadCleared := m.SourceTextNull && !m.SourceMediaPathRejected && m.RawType == 0 && m.MediaTitle == "" && m.MediaType == "" && m.MediaPath == "" && m.MediaURL == "" && m.DeletedAt.IsZero()
 	preserveExistingFTS := false
 	if m.EventID == "" {
 		m.EventID = messageEventID(m.SourcePK)
@@ -911,6 +918,12 @@ func upsertMessage(ctx context.Context, tx *sql.Tx, m Message, observedAt time.T
 		if sourcePayloadCleared && (!existing.DeletedAt.IsZero() || messageHasPayload(existing)) {
 			m.Tombstone = sourceTombstone(observedAt, "whatsapp_payload_cleared")
 			preserveExistingFTS = messageHasPayload(existing)
+		}
+		if !sourcePayloadCleared && m.DeletedAt.IsZero() && len(mediaRoots) != 0 {
+			m, err = retainArchivedMedia(mediaRoots[0], existing, m)
+			if err != nil {
+				return err
+			}
 		}
 		m.EventID = existing.EventID
 		previous, err := canonicalMessageJSON(existing)
@@ -1318,7 +1331,7 @@ func applyMessageFilters(query string, args []any, filter MessageFilter, joined 
 	return query, args
 }
 
-func scanMessages(ctx context.Context, db *sql.DB, query string, args ...any) ([]Message, error) {
+func scanMessages(ctx context.Context, db storedb.DBTX, query string, args ...any) ([]Message, error) {
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
