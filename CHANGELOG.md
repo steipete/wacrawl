@@ -8,6 +8,8 @@
 
 ### Fixed
 
+- Accept the exact legacy generated backup README in unpublished history without rewriting it, while still refusing edited content and unsafe file modes.
+- Correct backup push and recovery guidance: existing checkouts are not fetched or rebased, and publication refusal can retain a local snapshot commit.
 - Preserve an existing backup checkout's origin when configuration names a different remote, including unchanged push retries.
 - Retain message metadata when an optional local attachment path is invalid, without fabricating a deletion; reject the entire media-copy batch before copying any object.
 

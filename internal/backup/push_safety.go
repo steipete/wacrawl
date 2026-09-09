@@ -103,7 +103,7 @@ func verifyPendingHistory(ctx context.Context, cfg Config) error {
 				}
 			case "README.md":
 				body, err := scopeGit(ctx, cfg.Repo, "show", refs[0]+":"+name)
-				if err != nil || string(body) != backupReadme {
+				if err != nil || !ownedBackupReadme(body) {
 					return unsafeHistory(refs[0], name)
 				}
 			default:
