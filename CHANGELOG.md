@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Dependencies
+
+- Update CrawlKit to v0.15.0 for snapshot integrity and versioned encrypted backup generations, retaining the existing Go minimum and SQLite runtime pair.
+
 ### Fixed
 
 - Preserve an existing backup checkout's origin when configuration names a different remote, including unchanged push retries.
